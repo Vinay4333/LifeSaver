@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">LifeSaver</string>
+    <string name="guard_label">LifeSaver content guard</string>
+    <string name="guard_description">Reads the visible text of Reddit, Discord and browser screens on this phone only. If it sees an NSFW or 18+ label, it sends you to the home screen. Nothing it reads is stored or sent anywhere.</string>
 </resources>

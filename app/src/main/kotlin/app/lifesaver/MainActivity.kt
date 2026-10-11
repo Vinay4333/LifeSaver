@@ -6,6 +6,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.provider.Settings
 import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -20,7 +21,10 @@ import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import app.lifesaver.blocklist.Blocklist
 import app.lifesaver.blocklist.Overrides
+import app.lifesaver.guard.GuardStats
+import app.lifesaver.guard.GuardStatus
 import app.lifesaver.ui.BlocklistSection
+import app.lifesaver.ui.GuardSection
 import app.lifesaver.ui.HomeScreen
 import app.lifesaver.ui.LifeSaverTheme
 import app.lifesaver.vpn.BlockerVpnService
@@ -32,6 +36,8 @@ class MainActivity : ComponentActivity() {
     private var phase by mutableStateOf(VpnStatus.phase)
     private var index by mutableStateOf(Blocklist.current)
     private var loading by mutableStateOf(true)
+    private var guardEnabled by mutableStateOf(false)
+    private var guardCloses by mutableStateOf(0)
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -64,6 +70,13 @@ class MainActivity : ComponentActivity() {
                         phase = phase,
                         onStart = ::startProtection,
                         onStop = ::stopProtection,
+                        guard = {
+                            GuardSection(
+                                enabled = guardEnabled,
+                                closes = guardCloses,
+                                onOpenSettings = { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) },
+                            )
+                        },
                         blocklist = {
                             BlocklistSection(
                                 index = index,
@@ -80,6 +93,12 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        guardEnabled = GuardStatus.isEnabled(this)
+        guardCloses = GuardStats.closes(this)
     }
 
     private fun loadList(reload: Boolean) {

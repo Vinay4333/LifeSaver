@@ -20,6 +20,7 @@ fun HomeScreen(
     phase: VpnPhase,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    guard: @Composable () -> Unit,
     blocklist: @Composable () -> Unit,
 ) {
     Column(
@@ -38,6 +39,7 @@ fun HomeScreen(
         Button(onClick = onStop, enabled = phase == VpnPhase.On || phase == VpnPhase.Starting) {
             Text("Stop")
         }
+        guard()
         blocklist()
         Text(text = versionName, style = MaterialTheme.typography.bodySmall)
     }
