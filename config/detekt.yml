@@ -1,0 +1,22 @@
+naming:
+  FunctionNaming:
+    ignoreAnnotated:
+      - Composable
+
+style:
+  MagicNumber:
+    active: false
+  ReturnCount:
+    max: 6
+  MaxLineLength:
+    maxLineLength: 120
+
+complexity:
+  LongMethod:
+    allowedLines: 80
+  CyclomaticComplexMethod:
+    allowedComplexity: 20
+  TooManyFunctions:
+    allowedFunctionsPerClass: 25
+    allowedFunctionsPerFile: 25
+    allowedFunctionsPerObject: 25
