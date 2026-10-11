@@ -13,7 +13,7 @@ Smallest split that matches the threat model. Four modules. No extra process, no
 
 `:app` depends on the other three. `:vpn` depends on `:blocklist` and `:app`-free `:policy` interfaces only (status + "is hardened"). `:policy` does not parse packets. `:blocklist` has no Android VPN types.
 
-M0 ships `:app`. M1 adds `:vpn` with an in-module hardcoded list. M2 extracts `:blocklist`. M8 adds `:policy`.
+M0 ships `:app`. M1 adds `:vpn` with an in-module hardcoded list. M2 extracts `:blocklist` (hosts parser, `BlocklistIndex`, SharedPreferences overrides; bundled list in its assets). M8 adds `:policy`.
 
 Suggested package root: `app.lifesaver` (final name is a Step 2 question).
 
@@ -150,7 +150,7 @@ On each tick / process start: if `bootCount` unchanged, add `elapsedRealtime - a
 | --- | --- | --- |
 | Bundled blocklist | APK assets | Offline first run |
 | Current snapshot | `filesDir` (atomic replace) | Survives updates of the APK asset |
-| Allow/deny overrides | DataStore | Tiny |
+| Allow/deny overrides | SharedPreferences (M2) | Tiny |
 | Event log | Room, capped | Local audit |
 | Cooldown + partner secret | DataStore + `EncryptedSharedPreferences` | Secret never logged |
 | Ed25519 public key | APK | Update verify |

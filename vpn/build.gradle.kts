@@ -28,5 +28,6 @@ detekt {
 }
 
 dependencies {
+    implementation(project(":blocklist"))
     testImplementation(libs.junit)
 }

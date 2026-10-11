@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "LifeSaver"
 include(":app")
 include(":vpn")
+include(":blocklist")

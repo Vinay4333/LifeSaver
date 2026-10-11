@@ -4,6 +4,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -18,11 +20,13 @@ fun HomeScreen(
     phase: VpnPhase,
     onStart: () -> Unit,
     onStop: () -> Unit,
+    blocklist: @Composable () -> Unit,
 ) {
     Column(
         modifier =
             Modifier
                 .fillMaxSize()
+                .verticalScroll(rememberScrollState())
                 .padding(24.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
@@ -34,6 +38,7 @@ fun HomeScreen(
         Button(onClick = onStop, enabled = phase == VpnPhase.On || phase == VpnPhase.Starting) {
             Text("Stop")
         }
+        blocklist()
         Text(text = versionName, style = MaterialTheme.typography.bodySmall)
     }
 }

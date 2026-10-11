@@ -12,6 +12,7 @@ import android.net.VpnService
 import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
+import app.lifesaver.blocklist.Blocklist
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -64,7 +65,7 @@ class BlockerVpnService : VpnService() {
     }
 
     private fun runLoop() {
-        val established = establishTun()
+        val established = if (loadBlocklist()) establishTun() else null
         if (established == null) {
             VpnStatus.set(VpnPhase.Error)
             running.set(false)
@@ -96,13 +97,23 @@ class BlockerVpnService : VpnService() {
         }
     }
 
+    /** Fails closed: without a list the VPN does not come up and the UI shows an error. */
+    private fun loadBlocklist(): Boolean =
+        try {
+            Blocklist.ensureLoaded(this)
+            true
+        } catch (e: IOException) {
+            Log.e(TAG, "blocklist load failed: ${e.javaClass.simpleName}")
+            false
+        }
+
     private fun handlePacket(
         buffer: ByteArray,
         size: Int,
     ): ByteArray? {
         val query = PacketCodec.dnsQuery(buffer, size) ?: return null
         val payload =
-            if (DomainBlocklist.hardcoded.blocksAny(query.names)) {
+            if (Blocklist.current.blocksAny(query.names)) {
                 Log.d(TAG, "sinkhole")
                 DnsMessages.nxDomain(query.payload)
             } else {

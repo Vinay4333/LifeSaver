@@ -2,9 +2,11 @@ package app.lifesaver
 
 import android.Manifest
 import android.content.Intent
+import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
 import android.net.VpnService
 import android.os.Build
+import android.util.Log
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.result.contract.ActivityResultContracts
@@ -16,13 +18,20 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
+import app.lifesaver.blocklist.Blocklist
+import app.lifesaver.blocklist.Overrides
+import app.lifesaver.ui.BlocklistSection
 import app.lifesaver.ui.HomeScreen
 import app.lifesaver.ui.LifeSaverTheme
 import app.lifesaver.vpn.BlockerVpnService
 import app.lifesaver.vpn.VpnStatus
+import java.io.IOException
+import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     private var phase by mutableStateOf(VpnStatus.phase)
+    private var index by mutableStateOf(Blocklist.current)
+    private var loading by mutableStateOf(true)
 
     private val notificationPermission =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) {
@@ -38,23 +47,72 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: android.os.Bundle?) {
         super.onCreate(savedInstanceState)
+        loadList(reload = false)
         setContent {
             LifeSaverTheme {
                 Surface(modifier = Modifier.fillMaxSize()) {
                     DisposableEffect(Unit) {
-                        val remove = VpnStatus.addListener { phase = it }
-                        onDispose(remove)
+                        val removeStatus = VpnStatus.addListener { phase = it }
+                        val removeList = Blocklist.addListener { index = it }
+                        onDispose {
+                            removeStatus()
+                            removeList()
+                        }
                     }
                     HomeScreen(
                         versionName = versionLabel(),
                         phase = phase,
                         onStart = ::startProtection,
                         onStop = ::stopProtection,
+                        blocklist = {
+                            BlocklistSection(
+                                index = index,
+                                loading = loading,
+                                debug = isDebuggable(),
+                                onReload = { loadList(reload = true) },
+                                onAddDeny = ::addDeny,
+                                onAddAllow = ::addAllow,
+                                onRemoveDeny = ::removeDeny,
+                                onRemoveAllow = ::removeAllow,
+                            )
+                        },
                     )
                 }
             }
         }
     }
+
+    private fun loadList(reload: Boolean) {
+        loading = true
+        thread(name = "blocklist-load") {
+            try {
+                if (reload) Blocklist.reloadBundled(this) else Blocklist.ensureLoaded(this)
+            } catch (e: IOException) {
+                Log.e(TAG, "blocklist load failed: ${e.javaClass.simpleName}")
+            }
+            runOnUiThread { loading = false }
+        }
+    }
+
+    private fun addDeny(raw: String): Boolean = edit { it.addDeny(raw) }
+
+    private fun addAllow(raw: String): Boolean = edit { it.addAllow(raw) }
+
+    private fun removeDeny(name: String) {
+        edit { it.removeDeny(name) }
+    }
+
+    private fun removeAllow(name: String) {
+        edit { it.removeAllow(name) }
+    }
+
+    private fun <T> edit(change: (Overrides) -> T): T {
+        val result = change(Overrides(this))
+        Blocklist.applyOverrides(this)
+        return result
+    }
+
+    private fun isDebuggable(): Boolean = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
 
     private fun startProtection() {
         val needsNotification =
@@ -98,4 +156,8 @@ class MainActivity : ComponentActivity() {
             @Suppress("DEPRECATION")
             packageManager.getPackageInfo(packageName, 0).versionName
         } ?: "0.1.0"
+
+    private companion object {
+        const val TAG = "LifeSaver"
+    }
 }
