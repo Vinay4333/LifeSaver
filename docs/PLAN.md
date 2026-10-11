@@ -105,6 +105,20 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 
 **How to test.** Toggle emulator Private DNS (Off / Automatic / Private DNS provider hostname) and record pass/fail. This is the evidence file for THREAT_MODEL rows we currently mark unverified.
 
+**Status (2026-10-11).** Implemented and verified on the emulator. Evidence and gaps (IPv6 data path, Firefox) are in [verification/M3.md](verification/M3.md).
+
+## M3b — Content guard for Reddit / Discord (proposed, not approved)
+
+**Why.** Reddit and Discord serve NSFW and normal media from the same hostnames over HTTPS. DNS cannot tell them apart. The owner asked for "close the app when NSFW content opens".
+
+**Approach (needs owner approval; it reverses the "no Accessibility-based blockers" line below).** An `AccessibilityService` limited to a short package list (Reddit, Discord, optionally browsers). When it sees a strong NSFW signal in the on-screen text or view tree (NSFW / 18+ / age-restricted tags, a local list of NSFW subreddit and channel names), it sends the user to the home screen.
+
+**Known limits.**
+
+- Text-only: an unlabeled NSFW image is not detected. Screenshot + on-device ML (`takeScreenshot`, API 30+) would catch images but adds a model, battery cost and false positives. Out of scope unless asked.
+- The user must enable the service, and on a sideloaded app Android 13+ also needs "Allow restricted settings". The user can turn it off again until M9. Device owner can re-enable it. Unverified.
+- No page or screen content is stored or logged. Only a counter (M6).
+
 ## M4 — Minimal protected UI
 
 **Goal.** A status surface a tired person can understand, without a one-tap "off".
@@ -252,5 +266,5 @@ Private DNS mode: dedicated setters are opportunistic or specified-host only. Th
 ## Explicitly not in this plan
 
 - Running any provisioning on the physical phone (owner-driven, later).
-- Root, Magisk, custom recovery, Accessibility-based blockers, DNS-over-HTTPS MITM, a remote kill-switch server we operate, Play Store listing, content scanning inside images/video (on-device ML).
+- Root, Magisk, custom recovery, Accessibility-based blockers (except the proposed M3b), DNS-over-HTTPS MITM, a remote kill-switch server we operate, Play Store listing, content scanning inside images/video (on-device ML).
 - Blocking IP-literal CDNs used by Telegram / Reddit / X (called out as residual risk; a later optional IP list can be discussed after M3 evidence).

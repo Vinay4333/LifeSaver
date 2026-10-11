@@ -166,18 +166,22 @@ class BlockerVpnService : VpnService() {
 
     private fun establishTun(): ParcelFileDescriptor? =
         try {
-            Builder()
-                .setSession("LifeSaver")
-                .setMtu(MTU)
-                .addAddress(VPN_IPV4, IPV4_PREFIX)
-                .addDnsServer(DNS_IPV4)
-                .addRoute(DNS_IPV4, IPV4_PREFIX)
-                .addAddress(VPN_IPV6, IPV6_PREFIX)
-                .addDnsServer(DNS_IPV6)
-                .addRoute(DNS_IPV6, IPV6_PREFIX)
-                .setBlocking(true)
-                .setMetered(false)
-                .establish()
+            val builder =
+                Builder()
+                    .setSession("LifeSaver")
+                    .setMtu(MTU)
+                    .addAddress(VPN_IPV4, IPV4_PREFIX)
+                    .addDnsServer(DNS_IPV4)
+                    .addRoute(DNS_IPV4, IPV4_PREFIX)
+                    .addAddress(VPN_IPV6, IPV6_PREFIX)
+                    .addDnsServer(DNS_IPV6)
+                    .addRoute(DNS_IPV6, IPV6_PREFIX)
+                    .setBlocking(true)
+                    .setMetered(false)
+            // Known public resolvers are routed into the TUN and dropped (see KnownResolvers).
+            KnownResolvers.ipv4.forEach { builder.addRoute(it, IPV4_PREFIX) }
+            KnownResolvers.ipv6.forEach { builder.addRoute(it, IPV6_PREFIX) }
+            builder.establish()
         } catch (e: IllegalStateException) {
             Log.e(TAG, "establish rejected: ${e.javaClass.simpleName}")
             null

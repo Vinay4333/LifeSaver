@@ -11,6 +11,7 @@ import java.util.concurrent.CopyOnWriteArrayList
  */
 object Blocklist {
     private const val BUNDLED_ASSET = "porn-hosts.txt"
+    private const val RESOLVERS_ASSET = "resolver-hosts.txt"
 
     @Volatile
     var current: BlocklistIndex = BlocklistIndex.EMPTY
@@ -34,12 +35,10 @@ object Blocklist {
     @Synchronized
     fun reloadBundled(context: Context) {
         val app = context.applicationContext
-        val parsed =
-            app.assets.open(BUNDLED_ASSET).bufferedReader().use { reader ->
-                HostsParser.parse(reader.lineSequence())
-            }
+        val parsed = parseAsset(app, BUNDLED_ASSET)
+        val resolvers = parseAsset(app, RESOLVERS_ASSET).domains
         val overrides = Overrides(app)
-        publish(BlocklistIndex(parsed.domains, parsed.version, overrides.allow, overrides.deny))
+        publish(BlocklistIndex(parsed.domains, parsed.version, overrides.allow, overrides.deny, resolvers))
         loaded = true
     }
 
@@ -55,6 +54,14 @@ object Blocklist {
         listener(current)
         return { listeners.remove(listener) }
     }
+
+    private fun parseAsset(
+        context: Context,
+        name: String,
+    ): ParsedList =
+        context.assets.open(name).bufferedReader().use { reader ->
+            HostsParser.parse(reader.lineSequence())
+        }
 
     private fun publish(next: BlocklistIndex) {
         current = next

@@ -1,0 +1,57 @@
+# Known DoH / DoT resolver hostnames. Sinkholed so apps fall back to system DNS.
+# Hand-written from memory of well-known public resolvers. Completeness and exact spellings are
+# unverified: new resolvers appear all the time. Subdomains match too.
+
+# Google
+dns.google
+dns.google.com
+
+# Cloudflare
+cloudflare-dns.com
+one.one.one.one
+mozilla.cloudflare-dns.com
+chrome.cloudflare-dns.com
+security.cloudflare-dns.com
+family.cloudflare-dns.com
+
+# Quad9
+dns.quad9.net
+dns9.quad9.net
+dns10.quad9.net
+dns11.quad9.net
+
+# OpenDNS
+doh.opendns.com
+dns.opendns.com
+doh.familyshield.opendns.com
+
+# NextDNS, ControlD, AdGuard, CleanBrowsing, Mullvad
+dns.nextdns.io
+freedns.controld.com
+dns.adguard.com
+dns.adguard-dns.com
+unfiltered.adguard-dns.com
+family.adguard-dns.com
+doh.cleanbrowsing.org
+dns.mullvad.net
+doh.mullvad.net
+
+# Other public resolvers
+doh.libredns.gr
+dns.switch.ch
+dns.sb
+doh.sb
+dot.sb
+doh.pub
+dot.pub
+dns.alidns.com
+dns.twnic.tw
+dnsforge.de
+doh.applied-privacy.net
+dot1.applied-privacy.net
+dns.digitale-gesellschaft.ch
+ordns.he.net
+public.dns.iij.jp
+dns.njal.la
+doh.ffmuc.net
+doh.dns.apple.com

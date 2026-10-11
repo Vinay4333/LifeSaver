@@ -40,7 +40,13 @@ fun BlocklistSection(
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Block list", style = MaterialTheme.typography.titleMedium)
         Text(
-            text = if (loading) "Loading list" else "${index.baseCount} domains, version ${index.version}",
+            text =
+                if (loading) {
+                    "Loading list"
+                } else {
+                    "${index.baseCount} domains, version ${index.version}\n" +
+                        "${index.resolverCount} encrypted-DNS hosts blocked"
+                },
             style = MaterialTheme.typography.bodyMedium,
         )
         OutlinedButton(onClick = onReload, enabled = !loading) { Text("Reload bundled list") }

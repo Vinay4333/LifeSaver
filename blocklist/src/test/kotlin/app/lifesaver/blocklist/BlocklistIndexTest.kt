@@ -80,4 +80,19 @@ class BlocklistIndexTest {
     fun emptyIndexBlocksNothing() {
         assertFalse(BlocklistIndex.EMPTY.isBlocked("pornhub.com"))
     }
+
+    @Test
+    fun resolverHostsAreBlockedAndCannotBeAllowed() {
+        val list = BlocklistIndex(base, "v1", allow = setOf("dns.google"), resolvers = setOf("dns.google"))
+        assertTrue(list.isBlocked("dns.google"))
+        assertTrue(list.isBlocked("foo.dns.google"))
+        assertFalse(list.isBlocked("google"))
+        assertEquals(1, list.resolverCount)
+    }
+
+    @Test
+    fun resolversSurviveOverrideChanges() {
+        val list = BlocklistIndex(base, "v1", resolvers = setOf("dns.google")).withOverrides(emptySet(), emptySet())
+        assertTrue(list.isBlocked("dns.google"))
+    }
 }
