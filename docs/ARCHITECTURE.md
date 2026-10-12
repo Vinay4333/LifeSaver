@@ -124,21 +124,22 @@ Order matters: set always-on VPN **before** `DISALLOW_CONFIG_VPN`. That restrict
 
 ## Unlock
 
-Partner-approved, no fallback. Full rules in [UNLOCK.md](UNLOCK.md).
+Signed partner approval, no fallback. Full rules in [UNLOCK.md](UNLOCK.md).
 
 ```mermaid
 stateDiagram-v2
   [*] --> NoPartner
-  NoPartner --> Idle: partner email saved (once)
-  Idle --> Pending: request, email sent, hash stored
-  Pending --> Open: partner approves, hash matches
-  Pending --> Idle: cancel, 24h expiry, reboot
+  NoPartner --> Pending: paste partner key, pairing request
+  Pending --> Idle: partner signs pairing (partner saved)
+  Idle --> Pending: unlock or change-partner request
+  Pending --> Open: partner signs unlock
+  Pending --> Idle: cancel, 24h expiry, reboot, partner changed
   Open --> Idle: 15 min elapse, user locks, reboot
 ```
 
-`UnlockEngine` (in `:policy`) keeps `partnerEmail`, `approvalTopic`, `pendingHash/Purpose/NewEmail` and two timers (`pending*`, `window*`), each stored with `Until`, `At` and `Boot`. A timer is valid only while the boot count is unchanged and `elapsedRealtime` has not gone backwards. The wall clock is never read. While `Open`, `BlockerVpnService` forwards DNS without blocking and the content guard stays quiet. Nothing is stopped or restarted.
+`UnlockEngine` (in `:policy`) stores the partner's **public** key and, for a pending request, a random request id, a random relay topic and (for pairing and partner changes) the candidate key. Two timers (`pending*`, `window*`) each carry `Until`, `At` and `Boot`; a timer is valid only while the boot count is unchanged and `elapsedRealtime` has not gone backwards. The wall clock is never read. While `Open`, `BlockerVpnService` forwards DNS without blocking and the content guard stays quiet. Nothing is stopped or restarted.
 
-While `Pending`, the service's `approval-poll` thread asks the relay for messages on the approval topic every 5 seconds. Network calls never run under the engine lock.
+While `Pending`, the service's `approval-poll` thread asks the relay for messages on the request's topic every 5 seconds and verifies each `purpose.requestId.signature` with ECDSA P-256 (`PartnerCrypto`). Network calls never run under the engine lock. The relay carries only public data. The partner signs on the approve page (WebCrypto) or in the app (`PartnerKeys`).
 
 ## Persistence
 
@@ -148,7 +149,8 @@ While `Pending`, the service's `approval-poll` thread asks the relay for message
 | Current snapshot | `filesDir` (atomic replace) | Survives updates of the APK asset |
 | Allow/deny overrides | SharedPreferences (M2) | Tiny |
 | Event log | Room, capped | Local audit |
-| Unlock state (partner email, token hash, timers) | SharedPreferences `unlock` | No secret token is stored, only its hash |
+| Unlock state (partner public key, request id, timers) | SharedPreferences `unlock` | Nothing secret. The partner's private key never touches this phone |
+| Partner's own key (only on the partner's phone, when they use the app) | SharedPreferences `partner` | Private key stays on the partner's device |
 | Ed25519 public key | APK | Update verify |
 
 No account. Auto Backup is off for the whole app.

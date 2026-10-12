@@ -10,8 +10,8 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 - Package: `app.lifesaver`.
 - Stack: Kotlin, Gradle Kotlin DSL, Jetpack Compose, minSdk 26, targetSdk 36, compileSdk 37 (the installed platform is `android-37.0`).
 - Engine: local DNS-sinkhole `VpnService`. `:blocklist` arrives at M2. `:policy` arrives at M8.
-- Unlock (M5): **partner approval by emailed link, 15-minute window, no fallback** (2026-10-12). Rules in [UNLOCK.md](UNLOCK.md). The earlier 48-hour cooldown ([COOLDOWN.md](COOLDOWN.md)) is superseded.
-- Accountability partner: replaced by the emailed-link design above (ntfy.sh relay, hidden token). TOTP is deferred.
+- Unlock (M5): **signed partner approval, 15-minute window, no fallback** (2026-10-12). Rules in [UNLOCK.md](UNLOCK.md). The earlier 48-hour cooldown ([COOLDOWN.md](COOLDOWN.md)) is superseded.
+- Accountability partner: **signed approval** (ECDSA P-256; the partner holds the private key, the phone only the public key). The first emailed-token design died when ntfy.sh blocked anonymous email. TOTP is deferred.
 - Play Store stays available after device owner. Do not apply the restriction that also blocks registered app stores.
 
 ## M0 — Hello world on the emulator
@@ -135,23 +135,23 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 
 ## M5 — Partner-approved unlock (replaces the 48-hour cooldown)
 
-**Goal.** Protection can be paused only when a second person approves a request by email link. No fallback. See [UNLOCK.md](UNLOCK.md).
+**Goal.** Protection can be paused only when a second person signs a request with a key only they hold. No fallback. See [UNLOCK.md](UNLOCK.md).
 
 **Tasks.**
 
-- Add `:policy` with `UnlockEngine`, a token/hash flow, an ntfy relay client, link build/parse, and the monotonic window (15 minutes, boot count + `elapsedRealtime`).
-- Partner setup (once), request, cancel, re-lock, change-partner (approved by the current partner).
+- Add `:policy` with `UnlockEngine`, ECDSA signature verification, an ntfy relay client, link build/parse, and the monotonic window (15 minutes, boot count + `elapsedRealtime`).
+- Pairing (partner key + fingerprint check + signed pairing request), unlock request, cancel, re-lock, change-partner (signed by the current partner).
 - `BlockerVpnService`: suspend blocking while the window is open; poll the approval topic while a request is pending. Content guard honors the window.
-- UI: partner setup, request / pending / unlocked states, in-app approve screen (paste or `lifesaver://` link). Remove the Stop button in every build.
-- Static approve page `docs/approve/index.html`.
-- Unit tests for tokens, state machine, clock rules, link parsing, and the relay against a local fake server.
+- UI: pairing, request / pending / unlocked states, Share and Email of the request, in-app partner screen (own key, approve a link). Remove the Stop button in every build.
+- Static approve page `docs/approve/index.html` (WebCrypto: create key, backup, approve).
+- Unit tests for signatures (including a vector produced by WebCrypto), state machine, clock rules, link parsing, and the relay against a local fake server.
 
 **Definition of done.**
 
 - Unit tests pass, including the full request-approve-window flow against a local fake relay.
 - Emulator: request, approve through the relay, window opens and filtering stops, window ends and blocking resumes, reboot closes the window.
 - A wrong or replayed token does nothing. Changing the clock does not extend or shorten a window.
-- Real ntfy.sh email delivery and the hosted approve page are **unverified** until the owner supplies a partner email and enables GitHub Pages.
+- The hosted approve page and a real partner device are **unverified** until the owner enables GitHub Pages and a partner creates their key.
 
 **Limit.** No fallback by design: if the partner never answers, protection stays on.
 

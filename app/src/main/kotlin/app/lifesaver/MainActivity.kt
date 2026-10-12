@@ -1,9 +1,12 @@
 package app.lifesaver
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Intent
 import android.content.pm.ApplicationInfo
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.net.VpnService
 import android.os.Build
 import android.provider.Settings
@@ -22,19 +25,22 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.core.content.ContextCompat
 import app.lifesaver.blocklist.Blocklist
-import app.lifesaver.blocklist.Overrides
 import app.lifesaver.guard.GuardStats
 import app.lifesaver.guard.GuardStatus
 import app.lifesaver.policy.Approval
 import app.lifesaver.policy.ApproveLink
+import app.lifesaver.policy.ApproveResult
 import app.lifesaver.policy.RequestResult
 import app.lifesaver.policy.Unlock
 import app.lifesaver.policy.UnlockState
+import app.lifesaver.ui.ApproveActions
 import app.lifesaver.ui.ApproveSection
 import app.lifesaver.ui.BlocklistSection
 import app.lifesaver.ui.GuardSection
 import app.lifesaver.ui.HomeScreen
 import app.lifesaver.ui.LifeSaverTheme
+import app.lifesaver.ui.PartnerInfo
+import app.lifesaver.ui.UnlockActions
 import app.lifesaver.ui.UnlockSection
 import app.lifesaver.ui.protectionState
 import app.lifesaver.vpn.BlockerVpnService
@@ -45,6 +51,8 @@ import kotlin.concurrent.thread
 
 class MainActivity : ComponentActivity() {
     private val engine by lazy { Unlock.engine(this) }
+    private val partnerKeys by lazy { Unlock.partnerKeys(this) }
+    private val overrides by lazy { OverrideEditor(this) }
 
     private var phase by mutableStateOf(VpnStatus.phase)
     private var index by mutableStateOf(Blocklist.current)
@@ -53,9 +61,9 @@ class MainActivity : ComponentActivity() {
     private var guardEnabled by mutableStateOf(false)
     private var guardCloses by mutableStateOf(0)
     private var unlockState by mutableStateOf<UnlockState>(UnlockState.NoPartner)
-    private var partnerEmail by mutableStateOf<String?>(null)
-    private var unlockBusy by mutableStateOf(false)
+    private var partner by mutableStateOf(PartnerInfo(null, null, null))
     private var unlockMessage by mutableStateOf<String?>(null)
+    private var myPublicKey by mutableStateOf<String?>(null)
     private var incoming by mutableStateOf<Approval?>(null)
     private var approveBusy by mutableStateOf(false)
     private var approveMessage by mutableStateOf<String?>(null)
@@ -108,8 +116,7 @@ class MainActivity : ComponentActivity() {
         }
         LaunchedEffect(Unit) {
             while (true) {
-                unlockState = engine.state()
-                partnerEmail = engine.partnerEmail()
+                refreshUnlock()
                 delay(TICK_MS)
             }
         }
@@ -120,27 +127,15 @@ class MainActivity : ComponentActivity() {
             unlockRemainingMs = open?.remainingMs ?: 0,
             listVersion = index.version,
             onStart = ::startProtection,
-            unlock = {
-                UnlockSection(
-                    state = unlockState,
-                    partnerEmail = partnerEmail,
-                    busy = unlockBusy,
-                    message = unlockMessage,
-                    onSetupPartner = ::setupPartner,
-                    onRequest = { request { engine.requestUnlock() } },
-                    onCancel = { engine.cancel() },
-                    onRelock = { engine.relock() },
-                    onChangePartner = { email -> request { engine.requestChangePartner(email) } },
-                )
-            },
+            unlock = { UnlockSection(unlockState, partner, unlockMessage, unlockActions) },
             approve = {
                 ApproveSection(
+                    myPublicKey = myPublicKey,
+                    myFingerprint = myPublicKey?.let { partnerKeys.fingerprint() },
                     incoming = incoming,
                     busy = approveBusy,
                     message = approveMessage,
-                    onCheckLink = ::checkLink,
-                    onApprove = ::approve,
-                    onDismiss = { incoming = null },
+                    actions = approveActions,
                 )
             },
             guard = {
@@ -157,43 +152,100 @@ class MainActivity : ComponentActivity() {
                     // Allow / remove weaken protection: debug builds, and only inside an unlock window.
                     debug = isDebuggable() && open != null,
                     onReload = { loadList(reload = true) },
-                    onAddDeny = ::addDeny,
-                    onAddAllow = ::addAllow,
-                    onRemoveDeny = ::removeDeny,
-                    onRemoveAllow = ::removeAllow,
+                    onAddDeny = overrides::addDeny,
+                    onAddAllow = overrides::addAllow,
+                    onRemoveDeny = overrides::removeDeny,
+                    onRemoveAllow = overrides::removeAllow,
                 )
             },
         )
     }
 
-    private fun setupPartner(email: String) {
-        unlockMessage = if (engine.setupPartner(email)) "Partner saved." else "Enter a valid email address."
+    private fun refreshUnlock() {
+        unlockState = engine.state()
+        partner = PartnerInfo(engine.partnerFingerprint(), engine.partnerContact(), engine.pendingFingerprint())
+        myPublicKey = partnerKeys.publicKey()
     }
 
-    private fun request(action: () -> RequestResult) {
-        unlockBusy = true
-        unlockMessage = "Sending the request..."
-        thread(name = "unlock-request") {
-            val result = action()
-            runOnUiThread {
-                unlockBusy = false
-                unlockMessage =
-                    when (result) {
-                        RequestResult.Sent -> "Request sent. Your partner has to approve it."
-                        RequestResult.NotAllowed -> "A request is already open, or no partner is set."
-                        RequestResult.InvalidEmail -> "Enter a valid email address."
-                        RequestResult.SendFailed ->
-                            "Could not send the email (${engine.lastSendError ?: "unknown reason"})."
-                    }
-            }
+    private val unlockActions =
+        UnlockActions(
+            onBeginPairing = { key, contact -> setMessage(pairingText(engine.beginPairing(key.trim(), contact))) },
+            onRequestUnlock = { setMessage(requestText(engine.requestUnlock())) },
+            onChangePartner = { key, contact ->
+                setMessage(pairingText(engine.requestChangePartner(key.trim(), contact)))
+            },
+            onShare = ::shareRequest,
+            onEmail = ::emailRequest,
+            onCancel = { engine.cancel() },
+            onRelock = { engine.relock() },
+        )
+
+    private val approveActions =
+        ApproveActions(
+            onCreateKey = {
+                partnerKeys.create()
+                refreshUnlock()
+            },
+            onCopyKey = { copy("Partner public key", partnerKeys.publicKey().orEmpty()) },
+            onCheckLink = ::checkLink,
+            onApprove = ::approve,
+            onDismiss = { incoming = null },
+        )
+
+    private fun setMessage(text: String) {
+        unlockMessage = text
+        refreshUnlock()
+    }
+
+    private fun pairingText(result: RequestResult): String =
+        when (result) {
+            RequestResult.Created -> "Started. Compare the fingerprint with your partner, then send the request."
+            RequestResult.NotAllowed -> "Not possible right now: a request is already open."
+            RequestResult.InvalidKey -> "That is not a valid partner key (or it is your current partner's key)."
         }
+
+    private fun requestText(result: RequestResult): String =
+        when (result) {
+            RequestResult.Created -> "Request created. Send it to your partner; nothing is sent until you do."
+            else -> pairingText(result)
+        }
+
+    private fun shareRequest() {
+        val share = engine.share() ?: return
+        val send =
+            Intent(Intent.ACTION_SEND)
+                .setType("text/plain")
+                .putExtra(Intent.EXTRA_SUBJECT, share.subject)
+                .putExtra(Intent.EXTRA_TEXT, share.text)
+        startActivity(Intent.createChooser(send, "Send the request"))
+    }
+
+    private fun emailRequest() {
+        val share = engine.share() ?: return
+        val mail =
+            Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:"))
+                .putExtra(Intent.EXTRA_EMAIL, arrayOf(share.contact.orEmpty()))
+                .putExtra(Intent.EXTRA_SUBJECT, share.subject)
+                .putExtra(Intent.EXTRA_TEXT, share.text)
+        if (mail.resolveActivity(packageManager) != null) {
+            startActivity(mail)
+        } else {
+            unlockMessage = "No email app found. Use \"Send the request\" instead."
+        }
+    }
+
+    private fun copy(
+        label: String,
+        text: String,
+    ) {
+        getSystemService(ClipboardManager::class.java).setPrimaryClip(ClipData.newPlainText(label, text))
+        approveMessage = "Copied."
     }
 
     private fun handleLink(intent: Intent?) {
         val data = intent?.data ?: return
         if (data.scheme == "lifesaver") {
-            incoming = ApproveLink.parse(data.toString())
-            approveMessage = if (incoming == null) "That approval link is not valid." else null
+            checkLink(data.toString())
         }
     }
 
@@ -204,21 +256,24 @@ class MainActivity : ComponentActivity() {
 
     private fun approve(approval: Approval) {
         approveBusy = true
-        approveMessage = "Sending your approval..."
+        approveMessage = "Signing and sending..."
         thread(name = "approve") {
-            val ok = ApproveLink.approve(approval)
+            val result = partnerKeys.approve(approval)
             runOnUiThread {
                 approveBusy = false
-                if (ok) incoming = null
-                approveMessage =
-                    if (ok) {
-                        "Approved. Their phone unlocks within a few seconds."
-                    } else {
-                        "Could not reach the relay. Try again."
-                    }
+                if (result == ApproveResult.Sent) incoming = null
+                approveMessage = approveText(result)
             }
         }
     }
+
+    private fun approveText(result: ApproveResult): String =
+        when (result) {
+            ApproveResult.Sent -> "Approved. Their phone picks it up within a few seconds."
+            ApproveResult.NoKey -> "Create your partner key first."
+            ApproveResult.WrongKey -> "This request is for a different key than yours. Do not approve."
+            ApproveResult.SendFailed -> "Could not reach the relay. Try again."
+        }
 
     private fun loadList(reload: Boolean) {
         loading = true
@@ -230,24 +285,6 @@ class MainActivity : ComponentActivity() {
             }
             runOnUiThread { loading = false }
         }
-    }
-
-    private fun addDeny(raw: String): Boolean = edit { it.addDeny(raw) }
-
-    private fun addAllow(raw: String): Boolean = edit { it.addAllow(raw) }
-
-    private fun removeDeny(name: String) {
-        edit { it.removeDeny(name) }
-    }
-
-    private fun removeAllow(name: String) {
-        edit { it.removeAllow(name) }
-    }
-
-    private fun <T> edit(change: (Overrides) -> T): T {
-        val result = change(Overrides(this))
-        Blocklist.applyOverrides(this)
-        return result
     }
 
     private fun isDebuggable(): Boolean = applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0

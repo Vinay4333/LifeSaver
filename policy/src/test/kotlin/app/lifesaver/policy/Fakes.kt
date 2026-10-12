@@ -22,27 +22,9 @@ class FakeClock(
     override fun bootCount(): Int = boot
 }
 
-class SentEmail(
-    val email: String,
-    val body: String,
-    val clickUrl: String,
-)
-
-/** In-memory relay. The test plays the partner by reading the emailed link. */
+/** In-memory relay: topics map to the messages posted to them. */
 class FakeRelay : Relay {
     val topics = HashMap<String, MutableList<String>>()
-    val emails = ArrayList<SentEmail>()
-    var sendOk = true
-
-    override fun sendEmail(
-        email: String,
-        title: String,
-        body: String,
-        clickUrl: String,
-    ): String? {
-        if (sendOk) emails.add(SentEmail(email, body, clickUrl))
-        return if (sendOk) null else "HTTP 429: limit reached"
-    }
 
     override fun publish(
         topic: String,
@@ -53,12 +35,20 @@ class FakeRelay : Relay {
     }
 
     override fun poll(topic: String): List<String> = topics[topic]?.toList() ?: emptyList()
-
-    /** The partner clicks Approve on the most recent email. */
-    fun partnerApproves() {
-        val approval = ApproveLink.parse(emails.last().clickUrl)!!
-        ApproveLink.approve(approval, this)
-    }
-
-    fun lastApproval(): Approval = ApproveLink.parse(emails.last().clickUrl)!!
 }
+
+/** A person with a key of their own. The test plays them by signing what the phone shares. */
+class TestPartner(
+    val keys: PartnerKeyPair = PartnerCrypto.generate(),
+) {
+    val fingerprint: String get() = PartnerCrypto.fingerprint(keys.publicKey)!!
+
+    fun sign(approval: Approval): String = approval.response(PartnerCrypto.sign(keys.privateKey, approval.message())!!)
+
+    fun approve(
+        approval: Approval,
+        relay: Relay,
+    ) = relay.publish(approval.topic, sign(approval))
+}
+
+fun UnlockEngine.pendingApproval(): Approval = ApproveLink.parse(share()!!.webLink)!!

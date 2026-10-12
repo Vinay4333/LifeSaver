@@ -4,19 +4,8 @@ import java.io.IOException
 import java.net.HttpURLConnection
 import java.net.URL
 
-/** Moves messages between the phone and the partner. Network calls: never on the main thread. */
+/** Carries signed approvals from the partner to the phone. Only public data. Never call on the main thread. */
 interface Relay {
-    /**
-     * Emails [body] to [email]. The message goes to a fresh random topic that is not kept.
-     * Returns null on success, otherwise a short reason such as `HTTP 429` or `network error`.
-     */
-    fun sendEmail(
-        email: String,
-        title: String,
-        body: String,
-        clickUrl: String,
-    ): String?
-
     /** Posts [message] to [topic]. Used by the partner's approve action. */
     fun publish(
         topic: String,
@@ -32,18 +21,6 @@ class NtfyRelay(
     base: String,
 ) : Relay {
     private val base = base.trimEnd('/')
-
-    override fun sendEmail(
-        email: String,
-        title: String,
-        body: String,
-        clickUrl: String,
-    ): String? =
-        post(
-            "$base/${UnlockTokens.random()}",
-            body,
-            mapOf("Email" to email, "Title" to title, "Click" to clickUrl, "Priority" to "high"),
-        )
 
     override fun publish(
         topic: String,

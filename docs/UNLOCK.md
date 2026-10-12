@@ -1,46 +1,65 @@
-# Partner-approved unlock
+# Partner-approved unlock (signed approval)
 
-Approved 2026-10-12. This replaces the 48-hour cooldown in [COOLDOWN.md](COOLDOWN.md). **There is no fallback.** If the partner cannot approve, protection stays on. The accepted back door is still a factory reset (see [THREAT_MODEL.md](THREAT_MODEL.md)).
+Approved 2026-10-12, revised the same day. The first design emailed a secret token through the ntfy.sh email gateway. ntfy.sh no longer allows anonymous email (HTTP 400), and any email sender the user controls exposes the token. This design needs **no secret in transit**.
 
-## What "unlock" means
+**There is no fallback.** If the partner cannot approve, protection stays on. The accepted back door is still a factory reset (see [THREAT_MODEL.md](THREAT_MODEL.md)).
 
-Not "stop the VPN". Approval opens a **15-minute window** in which filtering is suspended: the VPN service keeps running (so there is nothing to restart and no foreground-service start restriction to hit), DNS is forwarded without blocking, and the content guard does not close screens. When the window ends, blocking resumes by itself. The user may re-lock early. There is no Stop button in any build.
+## Idea
 
-The window is measured on `SystemClock.elapsedRealtime()` with the boot count, never the wall clock. A reboot closes the window and drops any pending request.
+The partner holds a private key. The phone stores only the partner's **public** key. Each request carries a fresh random request id. Pausing protection requires a valid signature from the partner's key over that request. Anyone may see the request, the link, the relay and the signature: none of it helps without the private key.
 
-## Flow
+- Algorithm: ECDSA P-256 with SHA-256. Chosen because both WebCrypto (the approve page) and Android's JCA support it.
+- Public key: the 65-byte uncompressed point, base64url, no padding (87 characters).
+- Fingerprint: first 8 bytes of SHA-256 of the public key, as `A1B2-C3D4-E5F6-0718`.
+- Signature: 64 bytes `r || s` (what WebCrypto produces), base64url. The phone converts it to DER to verify.
+- Signed message (UTF-8): `lifesaver/v1|<purpose>|<requestId>|<extra>`, where `<extra>` is the new public key for a partner change and empty otherwise.
+- Purposes: `pair`, `unlock`, `partner`.
 
-1. **Setup (once).** The user enters the partner's email. The app also creates a random *approval topic*. Setup is allowed only while no partner is set.
-2. **Request.** The user taps "Request unlock". The phone makes a random token `T`, stores only `SHA-256(T)` and an expiry (24 h of device-on time), and sends the partner an email through the ntfy.sh email gateway. The email goes to a fresh random topic and contains a link carrying `T`. The phone then forgets `T`. The user never sees the email or `T`.
-3. **Approve.** The partner opens the link, which shows who is asking and what for, and presses **Approve**. That posts `purpose.T` to the approval topic. The partner can instead paste the link into the LifeSaver app on their own phone, or open the `lifesaver://approve?...` link there. The approve screen in the app does the same post.
-4. **Receive.** While a request is pending, the VPN service polls the approval topic every few seconds. A message whose token hashes to the stored value, with the right purpose, is accepted once. The window opens for 15 minutes.
-5. **Expire.** An unapproved request expires after 24 hours of device-on time. The user can cancel it. Either way the link stops working.
+## Pairing (once)
 
-Why the user cannot forge approval: the phone never holds `T` after sending it, only its hash. Reading the app's storage (a debug build allows `run-as` while USB debugging is on) yields the hash, not the token.
+1. The **partner** opens the approve page on their own device and taps "Become a partner". The page creates the key in their browser and shows the public key and fingerprint. It also offers a backup of the private key.
+2. The partner sends the user the public key.
+3. The user pastes it into the app. The app shows the fingerprint, to compare with the partner out loud or by text, and optionally takes the partner's email for the draft.
+4. The app creates a `pair` request. The user sends it to the partner. The partner presses Approve, which signs it.
+5. The phone verifies the signature against the pasted key. Only then is the partner saved. Until then nothing can be unlocked.
+
+Limit that software cannot close: if the **user** makes the key, the user is their own partner. The setup text says the key must be made on the partner's device.
+
+## Unlock
+
+1. "Request unlock" makes a request id and a random relay topic, with no network call. The app offers **Share** (Android share sheet) and **Email** (a draft to the optional address). The user sends the link. Nothing secret is in it.
+2. The partner opens the link. The page checks that its key matches the fingerprint the request names, shows what is being asked, and on **Approve** signs the request and posts `purpose.requestId.signature` to the relay topic.
+3. While the request is pending, the VPN service polls the topic every few seconds. A message for the pending request id with a valid signature opens a **15-minute window**. Anything else is ignored.
+4. An unapproved request expires after 24 hours of device-on time. The user can cancel it.
+
+During the window the VPN service keeps running and forwards DNS without blocking, and the content guard stays quiet. When it ends, blocking resumes by itself. The user may re-lock early. There is no Stop button.
+
+The window and expiry use `SystemClock.elapsedRealtime()` and the boot count, never the wall clock. A reboot closes the window and drops a pending request.
 
 ## Changing the partner
 
-Changing the partner is its own request with purpose `partner`. It is emailed to the **current** partner, and the new address is applied only after that partner approves. The approval topic is replaced at the same time, so old links die. This closes "swap the partner for my own address during an unlock window".
+A `partner` request: the **current** partner signs a message that includes the new public key, so the new key cannot be swapped after signing. The same pairing steps apply to the new partner's own device and fingerprint check, but the signature that counts is the current partner's.
 
-## Link format
+## Links
 
 ```
-https://vinay4333.github.io/LifeSaver/approve/#p=unlock&t=<T>&topic=<approval topic>&relay=https%3A%2F%2Fntfy.sh
-lifesaver://approve?p=unlock&t=<T>&topic=<approval topic>&relay=https%3A%2F%2Fntfy.sh
+https://vinay4333.github.io/LifeSaver/approve/#p=unlock&r=<requestId>&topic=<topic>&relay=<relay>&fp=<expected fingerprint>[&n=<new key>]
+lifesaver://approve?p=unlock&r=...&topic=...&relay=...&fp=...
 ```
 
-`T` sits in the URL fragment, so the static page host never receives it. The static page is `docs/approve/index.html` (GitHub Pages, source `main` / `docs`). It has no scripts from third parties. A plain `GET` link would be unsafe because mail scanners prefetch links; the page needs a button press, which a scanner does not make.
+Nothing secret rides in the link, so the fragment is only for tidiness. The page runs no third-party scripts. A mail scanner that prefetches the link cannot approve anything: signing needs the partner's key and a button press.
 
 ## Trust and limits
 
-- **ntfy.sh sees the token and the partner's email address.** The operator could approve a request. Self-hosting is out of scope. Topics are 128-bit random.
-- **Email delivery is best effort.** It can be slow, rate limited, or land in spam. If no email arrives the request just waits. No fallback by design.
-- **Needs network.** Airplane mode means no approval. A request cannot complete offline.
-- **Names resolved during the window stay cached** by the system for their TTL after the window closes, and open connections continue. Unverified how long.
-- **Wall clock is never used** for expiry or the window. `Settings.Global.BOOT_COUNT` on the Galaxy A15 is **unverified**. The code also treats `elapsedRealtime` going backwards as a reboot.
-- Anyone who can run `adb` or read process memory at the instant of the request, or flash the phone, is out of scope here. M9 closes adb. A factory reset wipes everything.
-- Debug builds only: the relay base URL can be pointed at a local test server with `-PntfyBase=...`. Default builds use `https://ntfy.sh`.
+- **Key loss means lockout.** No fallback. The page offers a private-key backup for the partner to keep somewhere safe. A lost key and no backup means only a factory reset.
+- **Who holds the key is a human matter** (see pairing).
+- **Relay (ntfy.sh)** carries only public data. It can delay or drop an approval; it cannot forge one. Publishing anonymously to a topic works (tested). Needs network: offline means no approval.
+- **The partner's browser** stores the private key in `localStorage`. Anyone with that browser profile can sign. Out of scope.
+- **Names resolved during the window stay cached** by the system for their TTL after it closes, and open connections continue. Unverified how long.
+- `Settings.Global.BOOT_COUNT` on the Galaxy A15 is **unverified**. The code also treats `elapsedRealtime` going backwards as a reboot.
+- adb or a debugger on the phone, root, or a flash are out of scope here. M9 closes adb. A factory reset wipes everything.
+- Debug builds only: `-PntfyBase=...` points the relay at a local test server.
 
 ## Stored values (SharedPreferences `unlock`)
 
-`partnerEmail`, `approvalTopic`, `pendingHash`, `pendingPurpose`, `pendingNewEmail`, `pendingUntil/Boot/At`, `windowUntil/Boot/At`. No token, no browsing data. `allowBackup` is already false.
+`partnerKey` (public), `partnerContact` (optional email), `pendingPurpose`, `pendingId`, `pendingTopic`, `pendingKey`, `pendingContact`, and the timers `pending*` / `window*` each with `Until`, `At`, `Boot`. No private key and no secret on the user's phone.

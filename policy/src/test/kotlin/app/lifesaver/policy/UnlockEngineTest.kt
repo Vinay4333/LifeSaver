@@ -2,6 +2,8 @@ package app.lifesaver.policy
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -16,12 +18,24 @@ class UnlockEngineTest {
             label = "LifeSaver on test",
         )
     private val engine = UnlockEngine(store, clock, relay, config)
+    private val partner = TestPartner()
 
     private val minute = 60_000L
     private val hour = 60 * minute
 
-    private fun withPartner(): UnlockEngine {
-        assertTrue(engine.setupPartner("partner@example.test"))
+    /** Pairs [partner] the way a real user would: paste the key, share the request, partner signs. */
+    private fun paired(contact: String? = "partner@example.test"): UnlockEngine {
+        assertEquals(RequestResult.Created, engine.beginPairing(partner.keys.publicKey, contact))
+        partner.approve(engine.pendingApproval(), relay)
+        assertTrue(engine.poll())
+        return engine
+    }
+
+    private fun unlocked(): UnlockEngine {
+        paired()
+        engine.requestUnlock()
+        partner.approve(engine.pendingApproval(), relay)
+        assertTrue(engine.poll())
         return engine
     }
 
@@ -29,44 +43,68 @@ class UnlockEngineTest {
     fun startsWithoutPartner() {
         assertEquals(UnlockState.NoPartner, engine.state())
         assertEquals(RequestResult.NotAllowed, engine.requestUnlock())
+        assertNull(engine.share())
     }
 
     @Test
-    fun setupAcceptsValidEmailOnceOnly() {
-        assertFalse(engine.setupPartner("not-an-email"))
-        assertTrue(engine.setupPartner("a@b.test"))
-        assertFalse(engine.setupPartner("someone-else@b.test"))
-        assertEquals("a@b.test", engine.partnerEmail())
-        assertEquals(UnlockState.Idle, engine.state())
+    fun pairingRejectsKeysThatAreNotP256Points() {
+        assertEquals(RequestResult.InvalidKey, engine.beginPairing("not-a-key", null))
+        assertEquals(RequestResult.InvalidKey, engine.beginPairing(PartnerCrypto.encode(ByteArray(65)), null))
+        assertEquals(UnlockState.NoPartner, engine.state())
     }
 
     @Test
-    fun requestEmailsPartnerAndStoresOnlyTheHash() {
-        withPartner()
-        assertEquals(RequestResult.Sent, engine.requestUnlock())
-        assertEquals("partner@example.test", relay.emails.single().email)
-        val token = relay.lastApproval().token
+    fun partnerIsSavedOnlyAfterTheySignThePairingRequest() {
+        assertEquals(RequestResult.Created, engine.beginPairing(partner.keys.publicKey, "p@x.test"))
         assertTrue(engine.state() is UnlockState.Pending)
-        assertTrue("token must not be stored", store.values.values.none { token in it })
-        assertTrue(store.values.values.contains(UnlockTokens.hash(token)))
-    }
-
-    @Test
-    fun failedSendLeavesNothingPending() {
-        withPartner()
-        relay.sendOk = false
-        assertEquals(RequestResult.SendFailed, engine.requestUnlock())
-        assertEquals("HTTP 429: limit reached", engine.lastSendError)
-        assertEquals(UnlockState.Idle, engine.state())
-    }
-
-    @Test
-    fun partnerApprovalOpensTheWindowForFifteenMinutes() {
-        withPartner()
-        engine.requestUnlock()
-        assertFalse(engine.poll())
-        relay.partnerApproves()
+        assertEquals(partner.fingerprint, engine.pendingFingerprint())
+        assertNull(engine.partnerKey())
+        assertEquals("p@x.test", engine.share()!!.contact)
+        partner.approve(engine.pendingApproval(), relay)
         assertTrue(engine.poll())
+        assertEquals(UnlockState.Idle, engine.state())
+        assertEquals(partner.keys.publicKey, engine.partnerKey())
+        assertEquals(partner.fingerprint, engine.partnerFingerprint())
+        assertEquals("p@x.test", engine.partnerContact())
+    }
+
+    @Test
+    fun aDifferentKeyCannotCompletePairing() {
+        engine.beginPairing(partner.keys.publicKey, null)
+        TestPartner().approve(engine.pendingApproval(), relay)
+        assertFalse(engine.poll())
+        assertNull(engine.partnerKey())
+    }
+
+    @Test
+    fun pairingCanBeCancelledAndRestarted() {
+        engine.beginPairing(partner.keys.publicKey, null)
+        engine.cancel()
+        assertEquals(UnlockState.NoPartner, engine.state())
+        assertEquals(RequestResult.Created, engine.beginPairing(TestPartner().keys.publicKey, null))
+    }
+
+    @Test
+    fun pairingIsNotAvailableOnceAPartnerExists() {
+        paired()
+        assertEquals(RequestResult.NotAllowed, engine.beginPairing(TestPartner().keys.publicKey, null))
+    }
+
+    @Test
+    fun unlockRequestNeedsNoNetworkAndSharesOnlyPublicData() {
+        paired()
+        assertEquals(RequestResult.Created, engine.requestUnlock())
+        val share = engine.share()!!
+        assertTrue(share.webLink.startsWith("https://example.test/approve/#p=unlock&r="))
+        assertTrue("lifesaver://approve?p=unlock" in share.appLink)
+        assertEquals("partner@example.test", share.contact)
+        assertTrue(share.text.contains(share.webLink))
+        assertTrue("no private key anywhere", store.values.values.none { partner.keys.privateKey in it })
+    }
+
+    @Test
+    fun partnerSignatureOpensTheWindowForFifteenMinutes() {
+        unlocked()
         assertTrue(engine.isOpen())
         assertEquals(UnlockState.Open(15 * minute), engine.state())
         clock.elapsed += 14 * minute
@@ -78,75 +116,80 @@ class UnlockEngineTest {
 
     @Test
     fun relockClosesTheWindow() {
-        withPartner()
-        engine.requestUnlock()
-        relay.partnerApproves()
-        engine.poll()
+        unlocked()
         engine.relock()
         assertFalse(engine.isOpen())
     }
 
     @Test
-    fun wrongTokenWrongPurposeAndGarbageDoNothing() {
-        withPartner()
+    fun badResponsesAreIgnored() {
+        paired()
         engine.requestUnlock()
-        val topic = relay.lastApproval().topic
-        relay.publish(topic, "unlock.not-the-token")
-        relay.publish(topic, "partner.${relay.lastApproval().token}")
-        relay.publish(topic, "garbage")
-        relay.publish(topic, "unlock.")
+        val approval = engine.pendingApproval()
+        val good = partner.sign(approval).substringAfterLast('.')
+        relay.publish(approval.topic, "unlock.${approval.requestId}.not-a-signature")
+        relay.publish(approval.topic, "unlock.OTHERID.$good")
+        relay.publish(approval.topic, "partner.${approval.requestId}.$good")
+        relay.publish(approval.topic, "unlock.${approval.requestId}")
+        relay.publish(approval.topic, "garbage")
+        relay.publish(approval.topic, TestPartner().sign(approval))
         assertFalse(engine.poll())
         assertFalse(engine.isOpen())
     }
 
     @Test
-    fun approvalWorksOnlyOnce() {
-        withPartner()
+    fun anOldSignatureDoesNotWorkForANewRequest() {
+        paired()
         engine.requestUnlock()
-        relay.partnerApproves()
+        val first = engine.pendingApproval()
+        val oldResponse = partner.sign(first)
+        relay.publish(first.topic, oldResponse)
         assertTrue(engine.poll())
         engine.relock()
+        engine.requestUnlock()
+        val fresh = engine.pendingApproval()
+        assertNotEquals(first.requestId, fresh.requestId)
+        relay.publish(fresh.topic, oldResponse)
         assertFalse(engine.poll())
-        assertFalse(engine.isOpen())
+        partner.approve(fresh, relay)
+        assertTrue(engine.poll())
     }
 
     @Test
-    fun cannotRequestWhilePendingOrOpen() {
-        withPartner()
+    fun cancelKillsTheRequest() {
+        paired()
         engine.requestUnlock()
-        assertEquals(RequestResult.NotAllowed, engine.requestUnlock())
-        relay.partnerApproves()
-        engine.poll()
-        assertEquals(RequestResult.NotAllowed, engine.requestUnlock())
-        assertEquals(1, relay.emails.size)
-    }
-
-    @Test
-    fun cancelKillsTheLink() {
-        withPartner()
-        engine.requestUnlock()
+        val approval = engine.pendingApproval()
         engine.cancel()
-        relay.partnerApproves()
+        partner.approve(approval, relay)
         assertFalse(engine.poll())
         assertEquals(UnlockState.Idle, engine.state())
     }
 
     @Test
-    fun requestExpiresAfterTwentyFourHoursOnTime() {
-        withPartner()
+    fun cannotRequestWhilePendingOrOpen() {
+        paired()
         engine.requestUnlock()
+        assertEquals(RequestResult.NotAllowed, engine.requestUnlock())
+        partner.approve(engine.pendingApproval(), relay)
+        engine.poll()
+        assertEquals(RequestResult.NotAllowed, engine.requestUnlock())
+    }
+
+    @Test
+    fun requestExpiresAfterTwentyFourHoursOnTime() {
+        paired()
+        engine.requestUnlock()
+        val approval = engine.pendingApproval()
         clock.elapsed += 25 * hour
-        relay.partnerApproves()
+        partner.approve(approval, relay)
         assertFalse(engine.poll())
         assertEquals(UnlockState.Idle, engine.state())
     }
 
     @Test
     fun rebootClosesTheWindow() {
-        withPartner()
-        engine.requestUnlock()
-        relay.partnerApproves()
-        engine.poll()
+        unlocked()
         clock.boot += 1
         clock.elapsed = 5_000
         assertFalse(engine.isOpen())
@@ -154,52 +197,71 @@ class UnlockEngineTest {
 
     @Test
     fun rebootDropsAPendingRequest() {
-        withPartner()
+        paired()
         engine.requestUnlock()
+        val approval = engine.pendingApproval()
         clock.boot += 1
         clock.elapsed = 5_000
-        relay.partnerApproves()
+        partner.approve(approval, relay)
         assertFalse(engine.poll())
         assertEquals(UnlockState.Idle, engine.state())
     }
 
     @Test
     fun elapsedGoingBackwardsIsTreatedAsReboot() {
-        withPartner()
-        engine.requestUnlock()
-        relay.partnerApproves()
-        engine.poll()
+        unlocked()
         clock.elapsed -= 10 * minute
         assertFalse(engine.isOpen())
     }
 
     @Test
-    fun changingPartnerNeedsTheCurrentPartnersApproval() {
-        withPartner()
-        val oldTopic = store.values["approvalTopic"]
-        assertEquals(RequestResult.InvalidEmail, engine.requestChangePartner("nope"))
-        assertEquals(RequestResult.Sent, engine.requestChangePartner("new@example.test"))
-        assertEquals("partner@example.test", relay.emails.last().email)
-        assertEquals("partner@example.test", engine.partnerEmail())
-        val stale = relay.lastApproval()
-        relay.partnerApproves()
+    fun changingPartnerNeedsTheCurrentPartnersSignatureOverTheNewKey() {
+        paired()
+        val next = TestPartner()
+        assertEquals(RequestResult.InvalidKey, engine.requestChangePartner("nope", null))
+        assertEquals(RequestResult.InvalidKey, engine.requestChangePartner(partner.keys.publicKey, null))
+        assertEquals(RequestResult.Created, engine.requestChangePartner(next.keys.publicKey, "new@x.test"))
+        val approval = engine.pendingApproval()
+        assertEquals(next.keys.publicKey, approval.newKey)
+        assertEquals(partner.fingerprint, approval.expectedFingerprint)
+        assertEquals("partner@example.test", engine.share()!!.contact)
+
+        next.approve(approval, relay)
+        assertFalse("the new key cannot approve its own appointment", engine.poll())
+        assertEquals(partner.keys.publicKey, engine.partnerKey())
+
+        partner.approve(approval, relay)
         assertTrue(engine.poll())
-        assertEquals("new@example.test", engine.partnerEmail())
+        assertEquals(next.keys.publicKey, engine.partnerKey())
+        assertEquals("new@x.test", engine.partnerContact())
         assertFalse(engine.isOpen())
-        assertTrue(store.values["approvalTopic"] != oldTopic)
-        engine.requestUnlock()
-        assertEquals("new@example.test", relay.emails.last().email)
-        ApproveLink.approve(stale, relay)
-        assertFalse(engine.poll())
     }
 
     @Test
-    fun aChangePartnerApprovalCannotOpenAnUnlockWindow() {
-        withPartner()
-        engine.requestChangePartner("new@example.test")
-        val topic = relay.lastApproval().topic
-        relay.publish(topic, "unlock.${relay.lastApproval().token}")
+    fun aSignatureForOneNewKeyCannotAppointAnother() {
+        paired()
+        val intended = TestPartner()
+        val attacker = TestPartner()
+        engine.requestChangePartner(attacker.keys.publicKey, null)
+        val real = engine.pendingApproval()
+        val forged = Approval(Purpose.ChangePartner, real.requestId, real.topic, "r", "fp", intended.keys.publicKey)
+        relay.publish(real.topic, partner.sign(forged))
         assertFalse(engine.poll())
-        assertFalse(engine.isOpen())
+        assertNotEquals(attacker.keys.publicKey, engine.partnerKey())
+    }
+
+    @Test
+    fun afterPartnerChangeOnlyTheNewKeyUnlocks() {
+        paired()
+        val next = TestPartner()
+        engine.requestChangePartner(next.keys.publicKey, null)
+        partner.approve(engine.pendingApproval(), relay)
+        engine.poll()
+        engine.requestUnlock()
+        val approval = engine.pendingApproval()
+        partner.approve(approval, relay)
+        assertFalse(engine.poll())
+        next.approve(approval, relay)
+        assertTrue(engine.poll())
     }
 }

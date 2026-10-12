@@ -18,45 +18,39 @@ import androidx.compose.ui.unit.dp
 import app.lifesaver.policy.Purpose
 import app.lifesaver.policy.UnlockState
 
+class PartnerInfo(
+    val fingerprint: String?,
+    val contact: String?,
+    /** While pairing or changing partner: the candidate's fingerprint, to compare out loud. */
+    val pendingFingerprint: String?,
+)
+
+class UnlockActions(
+    val onBeginPairing: (key: String, contact: String) -> Unit,
+    val onRequestUnlock: () -> Unit,
+    val onChangePartner: (key: String, contact: String) -> Unit,
+    val onShare: () -> Unit,
+    val onEmail: () -> Unit,
+    val onCancel: () -> Unit,
+    val onRelock: () -> Unit,
+)
+
 @Composable
 fun UnlockSection(
     state: UnlockState,
-    partnerEmail: String?,
-    busy: Boolean,
+    partner: PartnerInfo,
     message: String?,
-    onSetupPartner: (String) -> Unit,
-    onRequest: () -> Unit,
-    onCancel: () -> Unit,
-    onRelock: () -> Unit,
-    onChangePartner: (String) -> Unit,
+    actions: UnlockActions,
 ) {
     Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
         Text("Accountability partner", style = MaterialTheme.typography.titleMedium)
         when (state) {
-            UnlockState.NoPartner -> {
-                Text(
-                    "Enter your partner's email. They approve every unlock. " +
-                        "Set once; changing it later needs their approval.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                EmailRow("Partner email", "Save partner", enabled = !busy, onSubmit = onSetupPartner)
-            }
-            UnlockState.Idle -> {
-                Text("Partner: $partnerEmail", style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = onRequest, enabled = !busy) { Text("Request unlock") }
-                EmailRow("New partner email", "Ask to change partner", enabled = !busy, onSubmit = onChangePartner)
-            }
-            is UnlockState.Pending -> {
-                val what = if (state.purpose == Purpose.Unlock) "unlock" else "partner change"
-                Text(
-                    "Waiting for $partnerEmail to approve the $what. Expires in ${formatMinutes(state.remainingMs)}.",
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                OutlinedButton(onClick = onCancel) { Text("Cancel request") }
-            }
+            UnlockState.NoPartner -> PairingForm(actions)
+            UnlockState.Idle -> IdleBody(partner, actions)
+            is UnlockState.Pending -> PendingBody(state, partner, actions)
             is UnlockState.Open -> {
                 Text("Unlocked by your partner.", style = MaterialTheme.typography.bodyMedium)
-                Button(onClick = onRelock) { Text("Lock now") }
+                Button(onClick = actions.onRelock) { Text("Lock now") }
             }
         }
         if (message != null) {
@@ -66,25 +60,92 @@ fun UnlockSection(
 }
 
 @Composable
-private fun EmailRow(
-    label: String,
-    action: String,
-    enabled: Boolean,
-    onSubmit: (String) -> Unit,
+private fun PairingForm(actions: UnlockActions) {
+    Text(
+        "Your partner opens the approve page on their own device, creates a key there, and sends you " +
+            "the public key. Never make the key yourself: whoever holds it is the partner.",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    KeyForm(
+        "Partner's public key",
+        "Partner's email (optional, for the draft)",
+        "Start pairing",
+        actions.onBeginPairing,
+    )
+}
+
+@Composable
+private fun IdleBody(
+    partner: PartnerInfo,
+    actions: UnlockActions,
 ) {
-    var email by remember { mutableStateOf("") }
+    val contact = partner.contact?.let { " ($it)" }.orEmpty()
+    Text("Partner key: ${partner.fingerprint}$contact", style = MaterialTheme.typography.bodyMedium)
+    Button(onClick = actions.onRequestUnlock) { Text("Request unlock") }
+    Text("Change partner (needs your current partner to sign)", style = MaterialTheme.typography.labelLarge)
+    KeyForm(
+        "New partner's public key",
+        "New partner's email (optional)",
+        "Ask to change partner",
+        actions.onChangePartner,
+    )
+}
+
+@Composable
+private fun PendingBody(
+    state: UnlockState.Pending,
+    partner: PartnerInfo,
+    actions: UnlockActions,
+) {
+    val what =
+        when (state.purpose) {
+            Purpose.Pair -> "pairing"
+            Purpose.Unlock -> "unlock"
+            Purpose.ChangePartner -> "partner change"
+        }
+    Text(
+        "Waiting for your partner to sign the $what. Expires in ${formatMinutes(state.remainingMs)}.",
+        style = MaterialTheme.typography.bodyMedium,
+    )
+    if (partner.pendingFingerprint != null) {
+        Text(
+            "Compare with your partner out loud or by text: ${partner.pendingFingerprint}",
+            style = MaterialTheme.typography.bodyMedium,
+        )
+    }
+    Button(onClick = actions.onShare) { Text("Send the request") }
+    OutlinedButton(onClick = actions.onEmail) { Text("Email the request") }
+    OutlinedButton(onClick = actions.onCancel) { Text("Cancel request") }
+}
+
+@Composable
+private fun KeyForm(
+    keyLabel: String,
+    contactLabel: String,
+    action: String,
+    onSubmit: (String, String) -> Unit,
+) {
+    var key by remember { mutableStateOf("") }
+    var contact by remember { mutableStateOf("") }
     OutlinedTextField(
-        value = email,
-        onValueChange = { email = it },
-        label = { Text(label) },
+        value = key,
+        onValueChange = { key = it },
+        label = { Text(keyLabel) },
+        modifier = Modifier.fillMaxWidth(),
+    )
+    OutlinedTextField(
+        value = contact,
+        onValueChange = { contact = it },
+        label = { Text(contactLabel) },
         singleLine = true,
         modifier = Modifier.fillMaxWidth(),
     )
     OutlinedButton(
         onClick = {
-            onSubmit(email)
-            email = ""
+            onSubmit(key, contact)
+            key = ""
+            contact = ""
         },
-        enabled = enabled && email.isNotBlank(),
+        enabled = key.isNotBlank(),
     ) { Text(action) }
 }

@@ -6,6 +6,7 @@ import java.net.URLEncoder
 enum class Purpose(
     val wire: String,
 ) {
+    Pair("pair"),
     Unlock("unlock"),
     ChangePartner("partner"),
     ;
@@ -15,15 +16,24 @@ enum class Purpose(
     }
 }
 
-/** What the partner's link carries. [token] is the secret; [topic] is where approval is posted. */
+/**
+ * A request the partner is asked to sign. Nothing here is secret: [requestId] is random, [topic] is
+ * where the signature is posted, [expectedFingerprint] names the key that has to sign, and [newKey]
+ * is the replacement public key for a partner change.
+ */
 class Approval(
     val purpose: Purpose,
-    val token: String,
+    val requestId: String,
     val topic: String,
     val relay: String,
+    val expectedFingerprint: String,
+    val newKey: String = "",
 ) {
-    /** The message the phone is waiting for. */
-    fun message(): String = "${purpose.wire}.$token"
+    /** The exact text the partner's key signs. */
+    fun message(): String = PartnerCrypto.message(purpose, requestId, newKey)
+
+    /** What the partner posts to [topic]. The phone ignores anything that does not verify. */
+    fun response(signature: String): String = "${purpose.wire}.$requestId.$signature"
 }
 
 object ApproveLink {
@@ -39,37 +49,40 @@ object ApproveLink {
     /** Accepts the web link (`#...`), the app link (`?...`), or a bare query string. */
     fun parse(text: String): Approval? {
         val trimmed = text.trim()
-        val query = trimmed.substringAfter('#', trimmed.substringAfter('?', trimmed))
-        val params =
-            query
-                .split('&')
-                .mapNotNull {
-                    val key = it.substringBefore('=', "")
-                    if (key.isEmpty()) {
-                        null
-                    } else {
-                        key to
-                            URLDecoder.decode(it.substringAfter('=', ""), Charsets.UTF_8.name())
-                    }
-                }.toMap()
-        val purpose = params["p"]?.let(Purpose::fromWire) ?: return null
-        val token = params["t"]?.takeIf { it.isNotBlank() } ?: return null
-        val topic = params["topic"]?.takeIf { it.isNotBlank() } ?: return null
-        val relay = params["relay"]?.takeIf { it.startsWith("https://") || it.startsWith("http://") } ?: return null
-        return Approval(purpose, token, topic, relay)
+        val params = params(trimmed.substringAfter('#', trimmed.substringAfter('?', trimmed)))
+        val purpose = params["p"]?.let(Purpose::fromWire)
+        val requestId = params["r"].orEmpty()
+        val topic = params["topic"].orEmpty()
+        val fingerprint = params["fp"].orEmpty()
+        val relay = params["relay"].orEmpty()
+        val newKey = params["n"].orEmpty()
+        val complete =
+            purpose != null &&
+                listOf(requestId, topic, fingerprint).none { it.isBlank() } &&
+                (relay.startsWith("https://") || relay.startsWith("http://")) &&
+                (purpose != Purpose.ChangePartner || PartnerCrypto.isValidPublicKey(newKey))
+        return purpose?.takeIf { complete }?.let { Approval(it, requestId, topic, relay, fingerprint, newKey) }
     }
 
-    /** Partner side: posts the approval. Network call. */
-    fun approve(
-        approval: Approval,
-        relay: Relay = NtfyRelay(approval.relay),
-    ): Boolean = relay.publish(approval.topic, approval.message())
+    private fun params(query: String): Map<String, String> =
+        query
+            .split('&')
+            .mapNotNull {
+                val key = it.substringBefore('=', "")
+                if (key.isEmpty()) {
+                    null
+                } else {
+                    key to URLDecoder.decode(it.substringAfter('=', ""), Charsets.UTF_8.name())
+                }
+            }.toMap()
 
     private fun query(approval: Approval): String =
-        listOf(
-            "p" to approval.purpose.wire,
-            "t" to approval.token,
-            "topic" to approval.topic,
-            "relay" to approval.relay,
-        ).joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, Charsets.UTF_8.name())}" }
+        buildList {
+            add("p" to approval.purpose.wire)
+            add("r" to approval.requestId)
+            add("topic" to approval.topic)
+            add("relay" to approval.relay)
+            add("fp" to approval.expectedFingerprint)
+            if (approval.newKey.isNotEmpty()) add("n" to approval.newKey)
+        }.joinToString("&") { (k, v) -> "$k=${URLEncoder.encode(v, Charsets.UTF_8.name())}" }
 }

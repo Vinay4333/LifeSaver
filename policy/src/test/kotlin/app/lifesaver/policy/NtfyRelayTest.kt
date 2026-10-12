@@ -5,7 +5,6 @@ import com.sun.net.httpserver.HttpServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -14,10 +13,8 @@ import java.net.InetSocketAddress
 /** Runs the real HTTP client against a tiny local stand-in for ntfy. */
 class NtfyRelayTest {
     private lateinit var server: HttpServer
-    private val posts = ArrayList<Triple<String, String, Map<String, String>>>()
     private val topics = HashMap<String, MutableList<String>>()
     private var status = 200
-    private var errorBody: String? = null
 
     private val base get() = "http://127.0.0.1:${server.address.port}"
 
@@ -36,8 +33,6 @@ class NtfyRelayTest {
         val reply: String
         if (exchange.requestMethod == "POST") {
             val body = exchange.requestBody.readBytes().toString(Charsets.UTF_8)
-            val headers = exchange.requestHeaders.entries.associate { it.key.lowercase() to it.value.first() }
-            posts.add(Triple(path, body, headers))
             topics.getOrPut(path) { ArrayList() }.add(body)
             reply = "{}"
         } else {
@@ -49,29 +44,16 @@ class NtfyRelayTest {
                     }
             reply = lines.joinToString("\n")
         }
-        val bytes = (if (status >= 400) errorBody ?: reply else reply).toByteArray()
+        val bytes = reply.toByteArray()
         exchange.sendResponseHeaders(status, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
     }
 
     @Test
-    fun sendEmailPostsToAFreshTopicWithEmailHeaders() {
-        val relay = NtfyRelay(base)
-        assertNull(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
-        assertNull(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
-        val (first, second) = posts
-        assertEquals("Body text", first.second)
-        assertEquals("p@x.test", first.third["email"])
-        assertEquals("Title", first.third["title"])
-        assertEquals("https://click.test/#a", first.third["click"])
-        assertTrue("topics must differ per email", first.first != second.first)
-    }
-
-    @Test
     fun publishThenPollRoundTrips() {
         val relay = NtfyRelay(base)
-        assertTrue(relay.publish("approval1", "unlock.abc"))
-        assertEquals(listOf("unlock.abc"), relay.poll("approval1"))
+        assertTrue(relay.publish("topic1", "unlock.id.sig"))
+        assertEquals(listOf("unlock.id.sig"), relay.poll("topic1"))
         assertTrue(relay.poll("other").isEmpty())
     }
 
@@ -87,34 +69,25 @@ class NtfyRelayTest {
     }
 
     @Test
-    fun refusalReasonIncludesStatusAndNtfyMessage() {
-        status = 429
-        errorBody = """{"code":42905,"http":429,"error":"limit reached: too many emails"}"""
-        val reason = NtfyRelay(base).sendEmail("p@x.test", "T", "B", "https://c.test/")
-        assertEquals("HTTP 429: limit reached: too many emails", reason)
-    }
-
-    @Test
-    fun unreachableRelayReportsNetworkError() {
-        val relay = NtfyRelay(base)
-        server.stop(0)
-        assertTrue(relay.sendEmail("p@x.test", "T", "B", "https://c.test/")!!.startsWith("network error"))
-    }
-
-    @Test
-    fun fullFlowOverHttpOpensTheWindow() {
-        val store = MemoryStore()
-        val clock = FakeClock()
-        val relay = NtfyRelay(base)
+    fun fullFlowOverHttpPairsAndUnlocks() {
         val engine =
-            UnlockEngine(store, clock, relay, UnlockConfig(approveBase = "https://x.test/a/", relayBase = base))
-        assertTrue(engine.setupPartner("partner@x.test"))
-        assertEquals(RequestResult.Sent, engine.requestUnlock())
+            UnlockEngine(
+                MemoryStore(),
+                FakeClock(),
+                NtfyRelay(base),
+                UnlockConfig(approveBase = "https://x.test/a/", relayBase = base),
+            )
+        val partner = PartnerKeys(MemoryStore())
+        val publicKey = partner.create()
 
-        val emailed = posts.single { it.third.containsKey("email") }
-        val approval = ApproveLink.parse(emailed.third.getValue("click"))!!
+        assertEquals(RequestResult.Created, engine.beginPairing(publicKey, null))
         assertFalse(engine.poll())
-        assertTrue(ApproveLink.approve(approval, NtfyRelay(approval.relay)))
+        assertEquals(ApproveResult.Sent, partner.approve(ApproveLink.parse(engine.share()!!.webLink)!!))
+        assertTrue(engine.poll())
+
+        engine.requestUnlock()
+        val approval = ApproveLink.parse(engine.share()!!.webLink)!!
+        assertEquals(ApproveResult.Sent, partner.approve(approval))
         assertTrue(engine.poll())
         assertTrue(engine.isOpen())
     }

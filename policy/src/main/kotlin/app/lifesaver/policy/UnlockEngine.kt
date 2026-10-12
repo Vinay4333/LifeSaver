@@ -15,7 +15,7 @@ sealed interface UnlockState {
     ) : UnlockState
 }
 
-enum class RequestResult { Sent, NotAllowed, InvalidEmail, SendFailed }
+enum class RequestResult { Created, NotAllowed, InvalidKey }
 
 class UnlockConfig(
     val windowMs: Long = 15L * 60 * 1000,
@@ -24,15 +24,25 @@ class UnlockConfig(
     val approveBase: String,
     /** Relay base URL, carried in the link so the approve page knows where to post. */
     val relayBase: String,
-    /** Shown in the email, for example "LifeSaver on SM-A155F". */
+    /** Shown in the share text, for example "LifeSaver on SM-A155F". */
     val label: String = "LifeSaver",
+)
+
+/** What the user sends to the partner. Public data only. */
+class ShareRequest(
+    val text: String,
+    val webLink: String,
+    val appLink: String,
+    val contact: String?,
+    val subject: String,
 )
 
 /**
  * Partner-approved unlock. See docs/UNLOCK.md.
  *
- * The phone keeps only SHA-256 of the token it emailed, so the user cannot approve their own
- * request. All timing uses the monotonic clock and the boot count; a reboot drops a pending
+ * The phone holds only the partner's public key. A request is approved by a signature that only
+ * the partner's private key can make, so nothing secret travels and the user cannot approve their
+ * own request. All timing uses the monotonic clock and the boot count; a reboot drops a pending
  * request and closes the window.
  */
 class UnlockEngine(
@@ -44,12 +54,14 @@ class UnlockEngine(
     /** Guards the store. Never held across a network call, so the UI is never blocked on one. */
     private val lock = Any()
 
-    /** Why the last email could not be sent (for example `HTTP 429`), or null. Shown to the user. */
-    @Volatile
-    var lastSendError: String? = null
-        private set
+    fun partnerKey(): String? = synchronized(lock) { store.get(PARTNER_KEY) }
 
-    fun partnerEmail(): String? = synchronized(lock) { store.get(PARTNER) }
+    fun partnerFingerprint(): String? = partnerKey()?.let(PartnerCrypto::fingerprint)
+
+    fun partnerContact(): String? = synchronized(lock) { store.get(PARTNER_CONTACT) }
+
+    /** The candidate partner's fingerprint while pairing, for the user to compare with the partner. */
+    fun pendingFingerprint(): String? = synchronized(lock) { store.get(PENDING_KEY)?.let(PartnerCrypto::fingerprint) }
 
     fun isOpen(): Boolean = synchronized(lock) { remaining(WINDOW) > 0 }
 
@@ -62,59 +74,107 @@ class UnlockEngine(
         }
         val pending = remaining(PENDING)
         val purpose = store.get(PENDING_PURPOSE)?.let(Purpose::fromWire)
-        if (pending > 0 && purpose != null && store.get(PENDING_HASH) != null) {
+        if (pending > 0 && purpose != null && store.get(PENDING_ID) != null) {
             return UnlockState.Pending(purpose, pending)
         }
         clearPending()
-        return if (store.get(PARTNER) == null) UnlockState.NoPartner else UnlockState.Idle
+        return if (store.get(PARTNER_KEY) == null) UnlockState.NoPartner else UnlockState.Idle
     }
 
-    /** First-time setup only. Changing the partner later goes through [requestChangePartner]. */
-    fun setupPartner(email: String): Boolean =
+    /** First-time pairing. The partner is saved only once they sign the pairing request. */
+    fun beginPairing(
+        publicKey: String,
+        contact: String?,
+    ): RequestResult =
         synchronized(lock) {
-            if (store.get(PARTNER) != null || !validEmail(email)) {
-                false
-            } else {
-                store.put(PARTNER, email.trim())
-                store.put(TOPIC, UnlockTokens.random())
-                true
+            when {
+                stateLocked() != UnlockState.NoPartner -> RequestResult.NotAllowed
+                !PartnerCrypto.isValidPublicKey(publicKey) -> RequestResult.InvalidKey
+                else -> {
+                    createRequest(Purpose.Pair, publicKey.trim(), contact)
+                    RequestResult.Created
+                }
             }
         }
 
-    fun requestUnlock(): RequestResult = request(Purpose.Unlock, newEmail = null)
-
-    /** Emails the current partner. The new address is applied only after they approve. */
-    fun requestChangePartner(newEmail: String): RequestResult {
-        if (!validEmail(newEmail)) {
-            return RequestResult.InvalidEmail
+    fun requestUnlock(): RequestResult =
+        synchronized(lock) {
+            if (stateLocked() != UnlockState.Idle) {
+                RequestResult.NotAllowed
+            } else {
+                createRequest(Purpose.Unlock, newKey = null, contact = null)
+                RequestResult.Created
+            }
         }
-        return request(Purpose.ChangePartner, newEmail.trim())
-    }
+
+    /** The current partner must sign the new key. The new partner is saved only after that. */
+    fun requestChangePartner(
+        newKey: String,
+        newContact: String?,
+    ): RequestResult =
+        synchronized(lock) {
+            when {
+                stateLocked() != UnlockState.Idle -> RequestResult.NotAllowed
+                !PartnerCrypto.isValidPublicKey(newKey) || newKey.trim() == store.get(PARTNER_KEY) ->
+                    RequestResult.InvalidKey
+                else -> {
+                    createRequest(Purpose.ChangePartner, newKey.trim(), newContact)
+                    RequestResult.Created
+                }
+            }
+        }
+
+    /** The request waiting for a signature, ready to send, or null. */
+    fun share(): ShareRequest? =
+        synchronized(lock) {
+            val approval = pendingApproval() ?: return null
+            val web = ApproveLink.web(config.approveBase, approval)
+            val app = ApproveLink.app(approval)
+            val what =
+                when (approval.purpose) {
+                    Purpose.Pair -> "confirm you are my accountability partner"
+                    Purpose.Unlock -> "pause my protection for ${config.windowMs / MINUTE_MS} minutes"
+                    Purpose.ChangePartner -> "change my accountability partner"
+                }
+            // Pairing is addressed to the candidate, everything else to the current partner.
+            val contact =
+                if (approval.purpose == Purpose.Pair) store.get(PENDING_CONTACT) else store.get(PARTNER_CONTACT)
+            ShareRequest(
+                text =
+                    "${config.label} is asking you to $what.\n\n" +
+                        "Open this link and press Approve only if you agree:\n$web\n\n" +
+                        "With the LifeSaver app: $app",
+                webLink = web,
+                appLink = app,
+                contact = contact,
+                subject = "LifeSaver approval request",
+            )
+        }
 
     fun cancel() = synchronized(lock) { clearPending() }
 
     /** Re-locking early is always allowed. */
     fun relock() = synchronized(lock) { clearTimer(WINDOW) }
 
-    /** Checks the approval topic. Returns true if a pending request was just approved. Network call. */
+    /** Checks the request's topic. Returns true if the request was just approved. Network call. */
     fun poll(): Boolean {
         val snapshot =
             synchronized(lock) {
-                val pending = stateLocked() as? UnlockState.Pending ?: return false
-                Triple(pending.purpose, store.get(PENDING_HASH), store.get(TOPIC))
-            }
-        val (purpose, hash, topic) = snapshot
-        if (hash == null || topic == null) {
+                if (stateLocked() !is UnlockState.Pending) return false
+                pendingApproval()?.let { it to signerKey(it.purpose) }
+            } ?: return false
+        val (approval, signer) = snapshot
+        if (signer == null) {
             return false
         }
-        val messages = relay.poll(topic)
+        val messages = relay.poll(approval.topic)
         return synchronized(lock) {
             // The request may have been cancelled, replaced or expired while we were on the network.
-            if (stateLocked() !is UnlockState.Pending || store.get(PENDING_HASH) != hash) {
+            if (stateLocked() !is UnlockState.Pending || store.get(PENDING_ID) != approval.requestId) {
                 false
             } else {
-                val approved = messages.any { approves(it, purpose, hash) }
-                if (approved) accept(purpose)
+                val approved = messages.any { approves(it, approval, signer) }
+                if (approved) accept(approval.purpose)
                 approved
             }
         }
@@ -122,84 +182,58 @@ class UnlockEngine(
 
     private fun approves(
         message: String,
-        purpose: Purpose,
-        hash: String,
+        approval: Approval,
+        signer: String,
     ): Boolean {
-        val sent = Purpose.fromWire(message.substringBefore('.', "")) ?: return false
-        val token = message.substringAfter('.', "")
-        return sent == purpose && token.isNotEmpty() && UnlockTokens.matches(token, hash)
+        val parts = message.split('.')
+        if (parts.size != RESPONSE_PARTS || parts[0] != approval.purpose.wire || parts[1] != approval.requestId) {
+            return false
+        }
+        return PartnerCrypto.verify(signer, approval.message(), parts[2])
     }
 
-    private fun request(
+    /** The key that has to sign: the candidate while pairing, otherwise the saved partner. */
+    private fun signerKey(purpose: Purpose): String? =
+        if (purpose == Purpose.Pair) store.get(PENDING_KEY) else store.get(PARTNER_KEY)
+
+    private fun pendingApproval(): Approval? {
+        val purpose = store.get(PENDING_PURPOSE)?.let(Purpose::fromWire) ?: return null
+        val id = store.get(PENDING_ID) ?: return null
+        val topic = store.get(PENDING_TOPIC) ?: return null
+        val fingerprint = signerKey(purpose)?.let(PartnerCrypto::fingerprint) ?: return null
+        val newKey = if (purpose == Purpose.ChangePartner) store.get(PENDING_KEY).orEmpty() else ""
+        return Approval(purpose, id, topic, config.relayBase, fingerprint, newKey)
+    }
+
+    private fun createRequest(
         purpose: Purpose,
-        newEmail: String?,
-    ): RequestResult {
-        val ready =
-            synchronized(lock) {
-                val partner = store.get(PARTNER)
-                val topic = store.get(TOPIC)
-                if (partner == null || topic == null || stateLocked() != UnlockState.Idle) null else partner to topic
-            } ?: return RequestResult.NotAllowed
-        val (partner, topic) = ready
-        val token = UnlockTokens.random()
-        val approval = Approval(purpose, token, topic, config.relayBase)
-        val failure =
-            relay.sendEmail(
-                email = partner,
-                title = "LifeSaver approval request",
-                body = emailBody(purpose, newEmail, approval),
-                clickUrl = ApproveLink.web(config.approveBase, approval),
-            )
-        lastSendError = failure
-        if (failure != null) {
-            return RequestResult.SendFailed
-        }
-        return synchronized(lock) {
-            if (stateLocked() != UnlockState.Idle) {
-                RequestResult.NotAllowed
-            } else {
-                store.put(PENDING_HASH, UnlockTokens.hash(token))
-                store.put(PENDING_PURPOSE, purpose.wire)
-                store.put(PENDING_NEW_EMAIL, newEmail)
-                startTimer(PENDING, config.requestTtlMs)
-                RequestResult.Sent
-            }
-        }
+        newKey: String?,
+        contact: String?,
+    ) {
+        store.put(PENDING_PURPOSE, purpose.wire)
+        store.put(PENDING_ID, UnlockTokens.random())
+        store.put(PENDING_TOPIC, UnlockTokens.random())
+        store.put(PENDING_KEY, newKey)
+        store.put(PENDING_CONTACT, contact?.trim()?.ifBlank { null })
+        startTimer(PENDING, config.requestTtlMs)
     }
 
     private fun accept(purpose: Purpose) {
         when (purpose) {
             Purpose.Unlock -> startTimer(WINDOW, config.windowMs)
-            Purpose.ChangePartner -> {
-                store.get(PENDING_NEW_EMAIL)?.let { store.put(PARTNER, it) }
-                store.put(TOPIC, UnlockTokens.random())
+            Purpose.Pair, Purpose.ChangePartner -> {
+                store.put(PARTNER_KEY, store.get(PENDING_KEY))
+                store.put(PARTNER_CONTACT, store.get(PENDING_CONTACT))
             }
         }
         clearPending()
     }
 
-    private fun emailBody(
-        purpose: Purpose,
-        newEmail: String?,
-        approval: Approval,
-    ): String {
-        val ask =
-            when (purpose) {
-                Purpose.Unlock -> "pause its protection for ${config.windowMs / MINUTE_MS} minutes"
-                Purpose.ChangePartner -> "change its accountability partner to $newEmail"
-            }
-        return "${config.label} is asking to $ask.\n\n" +
-            "Open this link and press Approve only if you agree:\n" +
-            "${ApproveLink.web(config.approveBase, approval)}\n\n" +
-            "If you have the LifeSaver app: ${ApproveLink.app(approval)}\n" +
-            "Ignore this email to refuse. The request expires on its own."
-    }
-
     private fun clearPending() {
         clearTimer(PENDING)
-        store.put(PENDING_HASH, null)
-        store.put(PENDING_PURPOSE, null)
-        store.put(PENDING_NEW_EMAIL, null)
+        listOf(PENDING_PURPOSE, PENDING_ID, PENDING_TOPIC, PENDING_KEY, PENDING_CONTACT).forEach {
+            store.put(it, null)
+        }
     }
 
     private fun startTimer(
@@ -231,17 +265,17 @@ class UnlockEngine(
         return (until - now).coerceAtLeast(0)
     }
 
-    private fun validEmail(email: String): Boolean = EMAIL.matches(email.trim())
-
     private companion object {
-        const val PARTNER = "partnerEmail"
-        const val TOPIC = "approvalTopic"
+        const val PARTNER_KEY = "partnerKey"
+        const val PARTNER_CONTACT = "partnerContact"
         const val PENDING = "pending"
         const val WINDOW = "window"
-        const val PENDING_HASH = "pendingHash"
         const val PENDING_PURPOSE = "pendingPurpose"
-        const val PENDING_NEW_EMAIL = "pendingNewEmail"
+        const val PENDING_ID = "pendingId"
+        const val PENDING_TOPIC = "pendingTopic"
+        const val PENDING_KEY = "pendingKey"
+        const val PENDING_CONTACT = "pendingContact"
         const val MINUTE_MS = 60_000L
-        val EMAIL = Regex("^[^@\\s]+@[^@\\s]+\\.[^@\\s]+$")
+        const val RESPONSE_PARTS = 3
     }
 }

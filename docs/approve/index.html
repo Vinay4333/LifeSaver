@@ -4,54 +4,171 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta name="robots" content="noindex">
-<title>LifeSaver approval</title>
+<title>LifeSaver partner</title>
 <style>
-  body { font-family: system-ui, sans-serif; background: #121417; color: #e6e8ea; margin: 0; padding: 24px; }
-  main { max-width: 32rem; margin: 0 auto; }
+  body { font-family: system-ui, sans-serif; background: #121417; color: #e6e8ea; margin: 0; padding: 24px; line-height: 1.4; }
+  main { max-width: 34rem; margin: 0 auto; }
   h1 { font-size: 1.5rem; }
-  button { font-size: 1rem; padding: 12px 20px; border-radius: 999px; border: 0; margin-right: 8px; }
-  #approve { background: #8bd17c; color: #0e1a0c; }
-  #deny { background: #2a2f35; color: #e6e8ea; }
+  h2 { font-size: 1.1rem; margin-top: 1.5rem; }
+  button { font-size: 1rem; padding: 12px 20px; border-radius: 999px; border: 0; margin: 4px 8px 4px 0; cursor: pointer; }
+  button.primary { background: #8bd17c; color: #0e1a0c; }
+  button.plain { background: #2a2f35; color: #e6e8ea; }
+  button:disabled { opacity: .4; cursor: not-allowed; }
   .box { background: #1c2026; border-radius: 12px; padding: 16px; margin: 16px 0; }
+  .key { font-family: ui-monospace, monospace; word-break: break-all; font-size: .85rem; }
+  .fp { font-family: ui-monospace, monospace; font-size: 1.2rem; letter-spacing: .05em; }
+  .warn { color: #f5c26b; }
+  textarea { width: 100%; box-sizing: border-box; min-height: 5rem; background: #0f1114; color: #e6e8ea; border: 1px solid #3a4048; border-radius: 8px; padding: 8px; }
   a { color: #8bd17c; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <h1>LifeSaver approval request</h1>
-  <div class="box" id="what">Reading the link...</div>
-  <div id="actions" hidden>
-    <button id="approve">Approve</button>
-    <button id="deny">Do not approve</button>
-  </div>
-  <p id="result"></p>
-  <p><a id="open" href="#">Open in the LifeSaver app instead</a></p>
-  <p>This page runs no third-party scripts. The secret in the link stays in your browser and is sent
-  only to the relay named in the link, when you press Approve.</p>
+  <h1>LifeSaver partner</h1>
+
+  <section id="request" class="box" hidden>
+    <div id="what"></div>
+    <p>Your key: <span class="fp" id="mine">none yet</span></p>
+    <p id="mismatch" class="warn" hidden></p>
+    <div id="newkey" hidden>
+      <p>New partner key:</p>
+      <p class="fp" id="newfp"></p>
+    </div>
+    <button class="primary" id="approve" disabled>Approve</button>
+    <button class="plain" id="deny">Do not approve</button>
+    <p id="result"></p>
+  </section>
+
+  <section class="box" id="keybox">
+    <h2>Your partner key</h2>
+    <p id="nokey">You do not have a key on this device yet. Create it here, on your own device, and send the
+    public key to the person you are supporting. Never create the key on their phone.</p>
+    <button class="primary" id="create">Create my partner key</button>
+    <div id="havekey" hidden>
+      <p>Public key (send this to them):</p>
+      <p class="key" id="pub"></p>
+      <p>Fingerprint (read it out so they can compare):</p>
+      <p class="fp" id="fp"></p>
+      <button class="plain" id="copy">Copy public key</button>
+    </div>
+  </section>
+
+  <section class="box" id="backupbox" hidden>
+    <h2>Backup</h2>
+    <p class="warn">If you lose this key and have no backup, the person you support stays locked out. Keep a
+    backup somewhere private. Anyone who has it can approve in your place.</p>
+    <button class="plain" id="showbackup">Show backup</button>
+    <textarea id="backup" hidden readonly></textarea>
+  </section>
+
+  <section class="box">
+    <h2>Restore from a backup</h2>
+    <textarea id="restore" placeholder="Paste a backup here"></textarea>
+    <button class="plain" id="dorestore">Restore</button>
+    <p id="restoremsg"></p>
+  </section>
+
+  <p>This page runs no third-party scripts and sends nothing except your signature, to the relay named in the
+  link, when you press Approve. Your private key never leaves this browser.</p>
 </main>
-<script>
-(function () {
-  var params = new URLSearchParams(location.hash.replace(/^#/, ""));
-  var purpose = params.get("p"), token = params.get("t"), topic = params.get("topic"), relay = params.get("relay");
-  var what = document.getElementById("what"), result = document.getElementById("result");
-  var valid = (purpose === "unlock" || purpose === "partner") && token && topic && relay && /^https?:\/\//.test(relay);
-  if (!valid) { what.textContent = "This link is incomplete or damaged. Ask for a new request."; return; }
-  what.textContent = purpose === "unlock"
-    ? "Someone using LifeSaver is asking to pause their protection for 15 minutes. Approve only if you agree."
-    : "Someone using LifeSaver is asking to change their accountability partner. Approve only if you agree.";
-  document.getElementById("actions").hidden = false;
-  document.getElementById("open").href = "lifesaver://approve?" + new URLSearchParams(
-    { p: purpose, t: token, topic: topic, relay: relay }).toString();
-  document.getElementById("approve").onclick = function () {
-    result.textContent = "Sending...";
-    fetch(relay.replace(/\/$/, "") + "/" + encodeURIComponent(topic), { method: "POST", body: purpose + "." + token })
-      .then(function (r) { result.textContent = r.ok ? "Approved. You can close this page." : "The relay refused it. Try again."; })
-      .catch(function () { result.textContent = "Could not reach the relay. Check your connection and try again."; });
-  };
-  document.getElementById("deny").onclick = function () {
-    result.textContent = "Nothing was sent. The request will expire on its own.";
-  };
-})();
+<script type="module">
+import { generateKey, publicKeyOf, fingerprintOf, messageFor, sign, parseRequest } from "./crypto.js";
+
+const STORE = "lifesaver.partner.jwk";
+const $ = (id) => document.getElementById(id);
+const loadKey = () => {
+  try { return JSON.parse(localStorage.getItem(STORE) || "null"); } catch (e) { return null; }
+};
+const saveKey = (jwk) => localStorage.setItem(STORE, JSON.stringify(jwk));
+
+let mine = null;
+let request = parseRequest(location.hash || location.search);
+
+async function render() {
+  mine = loadKey();
+  const hasKey = !!mine;
+  $("nokey").hidden = hasKey;
+  $("create").hidden = hasKey;
+  $("havekey").hidden = !hasKey;
+  $("backupbox").hidden = !hasKey;
+  let fp = null;
+  if (hasKey) {
+    const pub = publicKeyOf(mine);
+    fp = await fingerprintOf(pub);
+    $("pub").textContent = pub;
+    $("fp").textContent = fp;
+    $("mine").textContent = fp;
+  }
+  if (request) await renderRequest(fp);
+}
+
+async function renderRequest(fp) {
+  $("request").hidden = false;
+  const text = {
+    pair: "Someone using LifeSaver wants to confirm that you are their accountability partner.",
+    unlock: "Someone using LifeSaver is asking to pause their protection for 15 minutes.",
+    partner: "Someone using LifeSaver is asking to change their accountability partner to the key below.",
+  }[request.purpose];
+  $("what").textContent = text + " Approve only if you agree.";
+  if (request.purpose === "partner") {
+    $("newkey").hidden = false;
+    $("newfp").textContent = await fingerprintOf(request.newKey);
+  }
+  const mismatch = $("mismatch");
+  if (!fp) {
+    mismatch.hidden = false;
+    mismatch.textContent = "You have no partner key on this device. Create it below (or restore a backup) first.";
+  } else if (fp !== request.fingerprint) {
+    mismatch.hidden = false;
+    mismatch.textContent = "This request is for a different key (" + request.fingerprint +
+      "). It is not for you on this device. Do not approve.";
+  } else {
+    mismatch.hidden = true;
+  }
+  $("approve").disabled = !(fp && fp === request.fingerprint);
+}
+
+$("create").onclick = async () => {
+  saveKey(await generateKey());
+  await render();
+};
+$("copy").onclick = async () => {
+  try { await navigator.clipboard.writeText($("pub").textContent); $("copy").textContent = "Copied"; }
+  catch (e) { $("copy").textContent = "Select and copy the key above"; }
+};
+$("showbackup").onclick = () => {
+  $("backup").hidden = false;
+  $("backup").value = JSON.stringify(mine);
+};
+$("dorestore").onclick = async () => {
+  try {
+    const jwk = JSON.parse($("restore").value.trim());
+    if (jwk.kty !== "EC" || jwk.crv !== "P-256" || !jwk.d || !jwk.x || !jwk.y) throw new Error("not a backup");
+    await sign(jwk, "check");
+    saveKey(jwk);
+    $("restoremsg").textContent = "Restored.";
+    $("restore").value = "";
+    await render();
+  } catch (e) {
+    $("restoremsg").textContent = "That is not a valid backup.";
+  }
+};
+$("deny").onclick = () => { $("result").textContent = "Nothing was sent. The request will expire on its own."; };
+$("approve").onclick = async () => {
+  $("result").textContent = "Signing and sending...";
+  try {
+    const message = messageFor(request.purpose, request.id, request.purpose === "partner" ? request.newKey : "");
+    const signature = await sign(mine, message);
+    const url = request.relay.replace(/\/$/, "") + "/" + encodeURIComponent(request.topic);
+    const response = await fetch(url, { method: "POST", body: request.purpose + "." + request.id + "." + signature });
+    $("result").textContent = response.ok ? "Approved. You can close this page." : "The relay refused it. Try again.";
+  } catch (e) {
+    $("result").textContent = "Could not reach the relay. Check your connection and try again.";
+  }
+};
+
+render();
 </script>
 </body>
 </html>

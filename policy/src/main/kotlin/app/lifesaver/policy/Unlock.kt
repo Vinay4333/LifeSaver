@@ -5,6 +5,7 @@ import android.content.Context
 /** Process-wide access to the [UnlockEngine]. [configure] runs once from `Application.onCreate`. */
 object Unlock {
     private const val PREFS = "unlock"
+    private const val PARTNER_PREFS = "partner"
 
     private var relayBase = "https://ntfy.sh"
     private var approveBase = ""
@@ -30,8 +31,9 @@ object Unlock {
 
     fun isOpen(context: Context): Boolean = engine(context).isOpen()
 
-    /** Relay for the partner-side approve action, using the app's configured relay. */
-    fun relay(): Relay = NtfyRelay(relayBase)
+    /** The partner's own key store, for approving in this app. Separate file from the unlock state. */
+    fun partnerKeys(context: Context): PartnerKeys =
+        PartnerKeys(PrefsStore(context.applicationContext.getSharedPreferences(PARTNER_PREFS, Context.MODE_PRIVATE)))
 
     private fun build(context: Context): UnlockEngine =
         UnlockEngine(
