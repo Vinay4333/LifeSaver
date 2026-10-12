@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpServer
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
@@ -16,6 +17,7 @@ class NtfyRelayTest {
     private val posts = ArrayList<Triple<String, String, Map<String, String>>>()
     private val topics = HashMap<String, MutableList<String>>()
     private var status = 200
+    private var errorBody: String? = null
 
     private val base get() = "http://127.0.0.1:${server.address.port}"
 
@@ -47,7 +49,7 @@ class NtfyRelayTest {
                     }
             reply = lines.joinToString("\n")
         }
-        val bytes = reply.toByteArray()
+        val bytes = (if (status >= 400) errorBody ?: reply else reply).toByteArray()
         exchange.sendResponseHeaders(status, bytes.size.toLong())
         exchange.responseBody.use { it.write(bytes) }
     }
@@ -55,8 +57,8 @@ class NtfyRelayTest {
     @Test
     fun sendEmailPostsToAFreshTopicWithEmailHeaders() {
         val relay = NtfyRelay(base)
-        assertTrue(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
-        assertTrue(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
+        assertNull(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
+        assertNull(relay.sendEmail("p@x.test", "Title", "Body text", "https://click.test/#a"))
         val (first, second) = posts
         assertEquals("Body text", first.second)
         assertEquals("p@x.test", first.third["email"])
@@ -82,6 +84,21 @@ class NtfyRelayTest {
         server.stop(0)
         assertFalse(relay.publish("t", "m"))
         assertTrue(relay.poll("t").isEmpty())
+    }
+
+    @Test
+    fun refusalReasonIncludesStatusAndNtfyMessage() {
+        status = 429
+        errorBody = """{"code":42905,"http":429,"error":"limit reached: too many emails"}"""
+        val reason = NtfyRelay(base).sendEmail("p@x.test", "T", "B", "https://c.test/")
+        assertEquals("HTTP 429: limit reached: too many emails", reason)
+    }
+
+    @Test
+    fun unreachableRelayReportsNetworkError() {
+        val relay = NtfyRelay(base)
+        server.stop(0)
+        assertTrue(relay.sendEmail("p@x.test", "T", "B", "https://c.test/")!!.startsWith("network error"))
     }
 
     @Test

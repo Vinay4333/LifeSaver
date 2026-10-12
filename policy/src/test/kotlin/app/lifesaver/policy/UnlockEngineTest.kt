@@ -56,6 +56,7 @@ class UnlockEngineTest {
         withPartner()
         relay.sendOk = false
         assertEquals(RequestResult.SendFailed, engine.requestUnlock())
+        assertEquals("HTTP 429: limit reached", engine.lastSendError)
         assertEquals(UnlockState.Idle, engine.state())
     }
 

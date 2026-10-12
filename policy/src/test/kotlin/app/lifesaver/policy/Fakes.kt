@@ -39,9 +39,9 @@ class FakeRelay : Relay {
         title: String,
         body: String,
         clickUrl: String,
-    ): Boolean {
+    ): String? {
         if (sendOk) emails.add(SentEmail(email, body, clickUrl))
-        return sendOk
+        return if (sendOk) null else "HTTP 429: limit reached"
     }
 
     override fun publish(

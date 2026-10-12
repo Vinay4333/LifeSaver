@@ -182,7 +182,8 @@ class MainActivity : ComponentActivity() {
                         RequestResult.Sent -> "Request sent. Your partner has to approve it."
                         RequestResult.NotAllowed -> "A request is already open, or no partner is set."
                         RequestResult.InvalidEmail -> "Enter a valid email address."
-                        RequestResult.SendFailed -> "Could not send the email. Check your connection and try again."
+                        RequestResult.SendFailed ->
+                            "Could not send the email (${engine.lastSendError ?: "unknown reason"})."
                     }
             }
         }

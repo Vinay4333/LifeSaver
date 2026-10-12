@@ -6,13 +6,16 @@ import java.net.URL
 
 /** Moves messages between the phone and the partner. Network calls: never on the main thread. */
 interface Relay {
-    /** Emails [body] to [email]. The message goes to a fresh random topic that is not kept. */
+    /**
+     * Emails [body] to [email]. The message goes to a fresh random topic that is not kept.
+     * Returns null on success, otherwise a short reason such as `HTTP 429` or `network error`.
+     */
     fun sendEmail(
         email: String,
         title: String,
         body: String,
         clickUrl: String,
-    ): Boolean
+    ): String?
 
     /** Posts [message] to [topic]. Used by the partner's approve action. */
     fun publish(
@@ -35,7 +38,7 @@ class NtfyRelay(
         title: String,
         body: String,
         clickUrl: String,
-    ): Boolean =
+    ): String? =
         post(
             "$base/${UnlockTokens.random()}",
             body,
@@ -45,7 +48,7 @@ class NtfyRelay(
     override fun publish(
         topic: String,
         message: String,
-    ): Boolean = post("$base/$topic", message, emptyMap())
+    ): Boolean = post("$base/$topic", message, emptyMap()) == null
 
     @Suppress("SwallowedException") // A network failure is an expected "no answer", not an error.
     override fun poll(topic: String): List<String> =
@@ -64,25 +67,43 @@ class NtfyRelay(
             emptyList()
         }
 
+    /** Returns null on success, otherwise a short reason that is safe to show the user. */
     @Suppress("SwallowedException")
     private fun post(
         url: String,
         body: String,
         headers: Map<String, String>,
-    ): Boolean =
+    ): String? =
         try {
             val connection = open(url, "POST")
             try {
                 headers.forEach { (name, value) -> connection.setRequestProperty(name, value) }
                 connection.doOutput = true
                 connection.outputStream.use { it.write(body.toByteArray(Charsets.UTF_8)) }
-                connection.responseCode in HTTP_OK_RANGE
+                val code = connection.responseCode
+                if (code in HTTP_OK_RANGE) null else "HTTP $code${errorText(connection)}"
             } finally {
                 connection.disconnect()
             }
         } catch (e: IOException) {
-            false
+            "network error (${e.javaClass.simpleName})"
         }
+
+    /** ntfy explains refusals in a small JSON body, for example the email rate limit. */
+    @Suppress("SwallowedException") // The reason is a nicety; the status code alone is still reported.
+    private fun errorText(connection: HttpURLConnection): String {
+        val raw =
+            try {
+                connection.errorStream
+                    ?.bufferedReader()
+                    ?.readText()
+                    .orEmpty()
+            } catch (e: IOException) {
+                ""
+            }
+        val reason = errorField.find(raw)?.groupValues?.get(1)
+        return if (reason.isNullOrBlank()) "" else ": ${reason.take(MAX_REASON)}"
+    }
 
     private fun open(
         url: String,
@@ -96,6 +117,8 @@ class NtfyRelay(
 
     private companion object {
         const val TIMEOUT_MS = 10_000
+        const val MAX_REASON = 120
+        val errorField = Regex("\"error\"\\s*:\\s*\"((?:[^\"\\\\]|\\\\.)*)\"")
         val HTTP_OK_RANGE = 200..299
     }
 }

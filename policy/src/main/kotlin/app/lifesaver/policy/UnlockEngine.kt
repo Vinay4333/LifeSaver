@@ -44,6 +44,11 @@ class UnlockEngine(
     /** Guards the store. Never held across a network call, so the UI is never blocked on one. */
     private val lock = Any()
 
+    /** Why the last email could not be sent (for example `HTTP 429`), or null. Shown to the user. */
+    @Volatile
+    var lastSendError: String? = null
+        private set
+
     fun partnerEmail(): String? = synchronized(lock) { store.get(PARTNER) }
 
     fun isOpen(): Boolean = synchronized(lock) { remaining(WINDOW) > 0 }
@@ -138,14 +143,15 @@ class UnlockEngine(
         val (partner, topic) = ready
         val token = UnlockTokens.random()
         val approval = Approval(purpose, token, topic, config.relayBase)
-        val sent =
+        val failure =
             relay.sendEmail(
                 email = partner,
                 title = "LifeSaver approval request",
                 body = emailBody(purpose, newEmail, approval),
                 clickUrl = ApproveLink.web(config.approveBase, approval),
             )
-        if (!sent) {
+        lastSendError = failure
+        if (failure != null) {
             return RequestResult.SendFailed
         }
         return synchronized(lock) {
