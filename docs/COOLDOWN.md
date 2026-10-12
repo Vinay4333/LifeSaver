@@ -1,3 +1,5 @@
+> **Superseded 2026-10-12 by [UNLOCK.md](UNLOCK.md).** The owner chose strict partner-approved unlock with no fallback, so there is no 48-hour cooldown. The clock reasoning below still applies to the 15-minute window and to request expiry.
+
 # Cooldown
 
 Approved duration: **48 hours of device-on time**.

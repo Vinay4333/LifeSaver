@@ -10,8 +10,8 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 - Package: `app.lifesaver`.
 - Stack: Kotlin, Gradle Kotlin DSL, Jetpack Compose, minSdk 26, targetSdk 36, compileSdk 37 (the installed platform is `android-37.0`).
 - Engine: local DNS-sinkhole `VpnService`. `:blocklist` arrives at M2. `:policy` arrives at M8.
-- Cooldown, when M5 is built: **48 hours of device-on time**. Rules are in [COOLDOWN.md](COOLDOWN.md).
-- Accountability partner: TOTP design stands. Implementation is deferred until asked. No webhook in the first build.
+- Unlock (M5): **partner approval by emailed link, 15-minute window, no fallback** (2026-10-12). Rules in [UNLOCK.md](UNLOCK.md). The earlier 48-hour cooldown ([COOLDOWN.md](COOLDOWN.md)) is superseded.
+- Accountability partner: replaced by the emailed-link design above (ntfy.sh relay, hidden token). TOTP is deferred.
 - Play Store stays available after device owner. Do not apply the restriction that also blocks registered app stores.
 
 ## M0 — Hello world on the emulator
@@ -133,27 +133,27 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 
 **Status (2026-10-12).** Implemented and verified on the emulator except the release-build Stop hiding. See [verification/M4.md](verification/M4.md).
 
-## M5 — Delayed unlock (monotonic)
+## M5 — Partner-approved unlock (replaces the 48-hour cooldown)
 
-**Goal.** Turning protection off requires a request plus 48 hours of device-on time that the system clock cannot skip. See [COOLDOWN.md](COOLDOWN.md).
+**Goal.** Protection can be paused only when a second person approves a request by email link. No fallback. See [UNLOCK.md](UNLOCK.md).
 
 **Tasks.**
 
-- Persist `requestBootCount`, `requestElapsedRealtime`, `accumulatedOnMillis`, `requiredOnMillis`.
-- Advance using `SystemClock.elapsedRealtime()` (includes deep sleep; resets on reboot). Accumulate across reboots with boot count.
-- Ignore wall-clock going backwards. Do **not** treat wall-clock forward jumps as progress (prevents "set date + 3 days").
-- Debug builds: show remaining device-on time. No hidden skip gesture.
-- Unit tests for accumulate / reboot / clock-rewind.
+- Add `:policy` with `UnlockEngine`, a token/hash flow, an ntfy relay client, link build/parse, and the monotonic window (15 minutes, boot count + `elapsedRealtime`).
+- Partner setup (once), request, cancel, re-lock, change-partner (approved by the current partner).
+- `BlockerVpnService`: suspend blocking while the window is open; poll the approval topic while a request is pending. Content guard honors the window.
+- UI: partner setup, request / pending / unlocked states, in-app approve screen (paste or `lifesaver://` link). Remove the Stop button in every build.
+- Static approve page `docs/approve/index.html`.
+- Unit tests for tokens, state machine, clock rules, link parsing, and the relay against a local fake server.
 
 **Definition of done.**
 
-- Request unlock → UI shows remaining time → after the configured on-time, Stop becomes available in debug.
-- Setting the emulator date forward does not finish the cooldown.
-- Reboot does not reset progress already accumulated.
+- Unit tests pass, including the full request-approve-window flow against a local fake relay.
+- Emulator: request, approve through the relay, window opens and filtering stops, window ends and blocking resumes, reboot closes the window.
+- A wrong or replayed token does nothing. Changing the clock does not extend or shorten a window.
+- Real ntfy.sh email delivery and the hosted approve page are **unverified** until the owner supplies a partner email and enables GitHub Pages.
 
-**How to test.** Use a short debug cooldown (2 minutes) on the emulator. Change date/time in Settings. Reboot the AVD. Confirm math.
-
-**Limit.** Time the phone is powered off does not count. That is safer against clock games and slower for a genuine unlock. Partner unlock (M11) is the escape hatch.
+**Limit.** No fallback by design: if the partner never answers, protection stays on.
 
 ## M6 — Local logging
 
@@ -245,23 +245,9 @@ Private DNS mode: dedicated setters are opportunistic or specified-host only. Th
 
 **Definition of done.** On the DO emulator, if we clear always-on via our own debug admin API, the watchdog restores it within one period. After a genuine completed unlock, it stays off until re-armed.
 
-## M11 — Accountability partner (deferred)
+## M11 — Partner extras (deferred)
 
-**Goal.** A second person holds the unlock secret. Optional tamper ping. Not started until the owner asks. The design (TOTP, secret shown once) is unchanged.
-
-**Tasks.**
-
-- One-time setup: generate a TOTP secret, show a QR **once**, then store only the secret in `EncryptedSharedPreferences` and never render it again.
-- Unlock after cooldown **or** a valid TOTP (partner can skip the wait).
-- Optional: HTTPS POST to a URL the partner chooses (ntfy / email webhook) on unlock-request and on "protection off". Fail open for network; do not block the VPN if the ping fails.
-
-**Definition of done.**
-
-- After setup, the secret is not in the UI or logcat.
-- Wrong TOTP fails. Right TOTP (from a test authenticator we control) unlocks.
-- Airplane mode: TOTP still works; webhook is skipped and logged.
-
-**How to test.** Emulator + any TOTP app APK. Do not use the owner's real partner secret in screenshots.
+Partner approval itself ships in M5. Left for later and not started: an optional tamper ping to the partner when protection goes down, and TOTP as an offline approval path if the owner wants one.
 
 ---
 

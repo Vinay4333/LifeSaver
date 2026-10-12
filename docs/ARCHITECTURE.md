@@ -28,7 +28,7 @@ Suggested package root: `app.lifesaver` (final name is a Step 2 question).
 | `LifeSaverAdminReceiver` | main (keep work short) | Device-owner callbacks |
 | `PolicyApplier` | background (`Dispatchers.IO`) | `setAlwaysOnVpnPackage`, restrictions |
 | `Watchdog` | WorkManager / `DeviceAdminReceiver` | Re-apply missing policy |
-| `CooldownStore` | main / IO | Monotonic unlock math |
+| `UnlockEngine` | main (state), IO (network) | Partner-approved unlock, monotonic window |
 | `EventLog` | IO | Local events only |
 
 ## Data flow
@@ -124,25 +124,21 @@ Order matters: set always-on VPN **before** `DISALLOW_CONFIG_VPN`. That restrict
 
 ## Unlock
 
+Partner-approved, no fallback. Full rules in [UNLOCK.md](UNLOCK.md).
+
 ```mermaid
 stateDiagram-v2
-  [*] --> Armed
-  Armed --> CoolingDown: user requests disable
-  CoolingDown --> Disarmed: elapsedRealtime quota met
-  CoolingDown --> Disarmed: valid partner TOTP
-  CoolingDown --> Armed: user cancels
-  Disarmed --> Armed: user re-enables
+  [*] --> NoPartner
+  NoPartner --> Idle: partner email saved (once)
+  Idle --> Pending: request, email sent, hash stored
+  Pending --> Open: partner approves, hash matches
+  Pending --> Idle: cancel, 24h expiry, reboot
+  Open --> Idle: 15 min elapse, user locks, reboot
 ```
 
-`CooldownStore` keys (DataStore or a tiny Room table):
+`UnlockEngine` (in `:policy`) keeps `partnerEmail`, `approvalTopic`, `pendingHash/Purpose/NewEmail` and two timers (`pending*`, `window*`), each stored with `Until`, `At` and `Boot`. A timer is valid only while the boot count is unchanged and `elapsedRealtime` has not gone backwards. The wall clock is never read. While `Open`, `BlockerVpnService` forwards DNS without blocking and the content guard stays quiet. Nothing is stopped or restarted.
 
-- `requiredOnMillis`
-- `accumulatedOnMillis`
-- `anchorElapsedRealtime`
-- `anchorBootCount`
-- `requestId`
-
-On each tick / process start: if `bootCount` unchanged, add `elapsedRealtime - anchor`. If boot changed, keep `accumulated` (do not add a wall-clock guess). Wall clock is stored only for display, never for "are we done?".
+While `Pending`, the service's `approval-poll` thread asks the relay for messages on the approval topic every 5 seconds. Network calls never run under the engine lock.
 
 ## Persistence
 
@@ -152,10 +148,10 @@ On each tick / process start: if `bootCount` unchanged, add `elapsedRealtime - a
 | Current snapshot | `filesDir` (atomic replace) | Survives updates of the APK asset |
 | Allow/deny overrides | SharedPreferences (M2) | Tiny |
 | Event log | Room, capped | Local audit |
-| Cooldown + partner secret | DataStore + `EncryptedSharedPreferences` | Secret never logged |
+| Unlock state (partner email, token hash, timers) | SharedPreferences `unlock` | No secret token is stored, only its hash |
 | Ed25519 public key | APK | Update verify |
 
-No account, no backup of the partner secret to cloud (disable Auto Backup for these files).
+No account. Auto Backup is off for the whole app.
 
 ## Logging (what we do not store)
 
@@ -177,7 +173,7 @@ Cost grows if we take `0.0.0.0/0` + `::/0` and forward every packet. M1 should t
 
 | Flavor | Use |
 | --- | --- |
-| `debug` | Start/Stop, short cooldown, extra logcat |
-| `hardened` | No Stop, no cooldown override, device-owner assumed |
+| `debug` | Extra logcat; allow/remove-block overrides, only inside an unlock window; `-PntfyBase` test relay |
+| `hardened` | No allow overrides, device-owner assumed |
 
-Both share the same engine. Do not ship a debug unlock in `hardened`.
+Both share the same engine. There is no Stop button in either, and no debug unlock.

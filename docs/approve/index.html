@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex">
+<title>LifeSaver approval</title>
+<style>
+  body { font-family: system-ui, sans-serif; background: #121417; color: #e6e8ea; margin: 0; padding: 24px; }
+  main { max-width: 32rem; margin: 0 auto; }
+  h1 { font-size: 1.5rem; }
+  button { font-size: 1rem; padding: 12px 20px; border-radius: 999px; border: 0; margin-right: 8px; }
+  #approve { background: #8bd17c; color: #0e1a0c; }
+  #deny { background: #2a2f35; color: #e6e8ea; }
+  .box { background: #1c2026; border-radius: 12px; padding: 16px; margin: 16px 0; }
+  a { color: #8bd17c; }
+</style>
+</head>
+<body>
+<main>
+  <h1>LifeSaver approval request</h1>
+  <div class="box" id="what">Reading the link...</div>
+  <div id="actions" hidden>
+    <button id="approve">Approve</button>
+    <button id="deny">Do not approve</button>
+  </div>
+  <p id="result"></p>
+  <p><a id="open" href="#">Open in the LifeSaver app instead</a></p>
+  <p>This page runs no third-party scripts. The secret in the link stays in your browser and is sent
+  only to the relay named in the link, when you press Approve.</p>
+</main>
+<script>
+(function () {
+  var params = new URLSearchParams(location.hash.replace(/^#/, ""));
+  var purpose = params.get("p"), token = params.get("t"), topic = params.get("topic"), relay = params.get("relay");
+  var what = document.getElementById("what"), result = document.getElementById("result");
+  var valid = (purpose === "unlock" || purpose === "partner") && token && topic && relay && /^https?:\/\//.test(relay);
+  if (!valid) { what.textContent = "This link is incomplete or damaged. Ask for a new request."; return; }
+  what.textContent = purpose === "unlock"
+    ? "Someone using LifeSaver is asking to pause their protection for 15 minutes. Approve only if you agree."
+    : "Someone using LifeSaver is asking to change their accountability partner. Approve only if you agree.";
+  document.getElementById("actions").hidden = false;
+  document.getElementById("open").href = "lifesaver://approve?" + new URLSearchParams(
+    { p: purpose, t: token, topic: topic, relay: relay }).toString();
+  document.getElementById("approve").onclick = function () {
+    result.textContent = "Sending...";
+    fetch(relay.replace(/\/$/, "") + "/" + encodeURIComponent(topic), { method: "POST", body: purpose + "." + token })
+      .then(function (r) { result.textContent = r.ok ? "Approved. You can close this page." : "The relay refused it. Try again."; })
+      .catch(function () { result.textContent = "Could not reach the relay. Check your connection and try again."; });
+  };
+  document.getElementById("deny").onclick = function () {
+    result.textContent = "Nothing was sent. The request will expire on its own.";
+  };
+})();
+</script>
+</body>
+</html>

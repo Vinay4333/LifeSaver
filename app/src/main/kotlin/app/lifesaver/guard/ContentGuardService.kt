@@ -9,6 +9,7 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.Toast
 import app.lifesaver.blocklist.NsfwTextMatcher
+import app.lifesaver.policy.Unlock
 
 /**
  * Sends the user to the home screen when Reddit / Discord (or a browser on one of their sites)
@@ -47,6 +48,9 @@ class ContentGuardService : AccessibilityService() {
 
     private fun scanNow() {
         scanPending = false
+        if (Unlock.isOpen(this)) {
+            return
+        }
         val pkg = lastPackage ?: return
         val root = rootInActiveWindow ?: return
         if (root.packageName?.toString() != pkg) {

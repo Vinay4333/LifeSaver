@@ -15,6 +15,13 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+
+        // Relay and approve page. Override with -PntfyBase=... only for emulator testing.
+        val ntfyBase = providers.gradleProperty("ntfyBase").getOrElse("https://ntfy.sh")
+        val approveBase =
+            providers.gradleProperty("approveBase").getOrElse("https://vinay4333.github.io/LifeSaver/approve/")
+        buildConfigField("String", "NTFY_BASE", "\"$ntfyBase\"")
+        buildConfigField("String", "APPROVE_BASE", "\"$approveBase\"")
     }
 
     buildTypes {
@@ -30,6 +37,7 @@ android {
 
     buildFeatures {
         compose = true
+        buildConfig = true
     }
 }
 
@@ -45,6 +53,7 @@ detekt {
 dependencies {
     implementation(project(":vpn"))
     implementation(project(":blocklist"))
+    implementation(project(":policy"))
     implementation(platform(libs.compose.bom))
     implementation(libs.compose.ui)
     implementation(libs.compose.material3)

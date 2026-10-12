@@ -12,7 +12,7 @@ This is a single-user, sideloaded app. It is not a product, not an MDM, and not 
 - Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - Milestones: [docs/PLAN.md](docs/PLAN.md).
 - Device-owner provisioning: [docs/DEVICE_OWNER_SETUP.md](docs/DEVICE_OWNER_SETUP.md).
-- Cooldown rules: [docs/COOLDOWN.md](docs/COOLDOWN.md).
+- Unlock rules: [docs/UNLOCK.md](docs/UNLOCK.md) (supersedes [docs/COOLDOWN.md](docs/COOLDOWN.md)).
 
 Target device: Samsung Galaxy A15, Android 16 (API 36). Package `app.lifesaver`. The local emulator is API 37. Do not install on the phone unless this chat turn says so.
 
@@ -109,6 +109,7 @@ Examples: `feat: sinkhole hardcoded DNS names in VpnService`, `docs: add device-
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | Modules, data flow, threading |
 | [docs/THREAT_MODEL.md](docs/THREAT_MODEL.md) | Bypass → mitigation → residual risk |
 | [docs/DEVICE_OWNER_SETUP.md](docs/DEVICE_OWNER_SETUP.md) | Emulator and (later) phone provisioning |
-| [docs/COOLDOWN.md](docs/COOLDOWN.md) | 48-hour device-on unlock timer |
+| [docs/UNLOCK.md](docs/UNLOCK.md) | Partner-approved unlock, 15-minute window, no fallback |
+| [docs/COOLDOWN.md](docs/COOLDOWN.md) | Superseded 48-hour timer; clock reasoning still used |
 
 Do not write app code until the owner approves the plan. After approval, implement **M0 and M1 only**, then stop and show emulator verification.

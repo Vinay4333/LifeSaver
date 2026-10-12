@@ -26,4 +26,10 @@ class ProtectionStateTest {
         assertEquals(ProtectionState.Starting, protectionState(VpnPhase.Starting, hasConsent = true))
         assertEquals(ProtectionState.Error, protectionState(VpnPhase.Error, hasConsent = false))
     }
+
+    @Test
+    fun openWindowWhileOnShowsUnlocked() {
+        assertEquals(ProtectionState.Unlocked, protectionState(VpnPhase.On, hasConsent = true, unlocked = true))
+        assertEquals(ProtectionState.Down, protectionState(VpnPhase.Off, hasConsent = true, unlocked = true))
+    }
 }

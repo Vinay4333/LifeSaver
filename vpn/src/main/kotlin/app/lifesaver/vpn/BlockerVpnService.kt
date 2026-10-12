@@ -13,6 +13,8 @@ import android.os.Build
 import android.os.ParcelFileDescriptor
 import android.util.Log
 import app.lifesaver.blocklist.Blocklist
+import app.lifesaver.policy.Unlock
+import app.lifesaver.policy.UnlockState
 import java.io.FileInputStream
 import java.io.FileOutputStream
 import java.io.IOException
@@ -25,6 +27,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 class BlockerVpnService : VpnService() {
     private val running = AtomicBoolean(false)
     private var worker: Thread? = null
+    private var approvalPoller: Thread? = null
     private var tun: ParcelFileDescriptor? = null
 
     override fun onStartCommand(
@@ -32,10 +35,6 @@ class BlockerVpnService : VpnService() {
         flags: Int,
         startId: Int,
     ): Int {
-        if (intent?.action == ACTION_STOP) {
-            stopVpn()
-            return START_NOT_STICKY
-        }
         if (!promoteToForeground()) {
             VpnStatus.set(VpnPhase.Error)
             stopSelf()
@@ -51,6 +50,7 @@ class BlockerVpnService : VpnService() {
 
     override fun onDestroy() {
         running.set(false)
+        approvalPoller?.interrupt()
         closeTun()
         super.onDestroy()
     }
@@ -62,6 +62,23 @@ class BlockerVpnService : VpnService() {
         running.set(true)
         VpnStatus.set(VpnPhase.Starting)
         worker = Thread(::runLoop, "vpn-io").also { it.start() }
+        approvalPoller = Thread(::pollApprovals, "approval-poll").also { it.start() }
+    }
+
+    /** While a partner request is pending, ask the relay whether it was approved. */
+    private fun pollApprovals() {
+        val engine = Unlock.engine(this)
+        while (running.get()) {
+            if (engine.state() is UnlockState.Pending && engine.poll()) {
+                Log.d(TAG, "unlock approved")
+            }
+            try {
+                Thread.sleep(POLL_INTERVAL_MS)
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+                return
+            }
+        }
     }
 
     private fun runLoop() {
@@ -113,7 +130,7 @@ class BlockerVpnService : VpnService() {
     ): ByteArray? {
         val query = PacketCodec.dnsQuery(buffer, size) ?: return null
         val payload =
-            if (Blocklist.current.blocksAny(query.names)) {
+            if (!Unlock.isOpen(this) && Blocklist.current.blocksAny(query.names)) {
                 Log.d(TAG, "sinkhole")
                 DnsMessages.nxDomain(query.payload)
             } else {
@@ -261,7 +278,6 @@ class BlockerVpnService : VpnService() {
     }
 
     companion object {
-        const val ACTION_STOP = "app.lifesaver.vpn.STOP"
         private const val TAG = "BlockerVpn"
         private const val CHANNEL_ID = "protection"
         private const val NOTIFICATION_ID = 1
@@ -270,6 +286,7 @@ class BlockerVpnService : VpnService() {
         private const val MAX_PACKET = 32767
         private const val MAX_DNS = 4096
         private const val FORWARD_TIMEOUT_MS = 3000
+        private const val POLL_INTERVAL_MS = 5000L
         private const val IPV4_PREFIX = 32
         private const val IPV6_PREFIX = 128
         private const val VPN_IPV4 = "10.0.0.2"
