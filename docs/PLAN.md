@@ -131,6 +131,8 @@ No milestone talks to a physical phone. Device-owner work on the real phone is a
 
 **Definition of done.** Launch → status is correct with VPN up and down. No settings page that disables protection in one tap.
 
+**Status (2026-10-12).** Implemented and verified on the emulator except the release-build Stop hiding. See [verification/M4.md](verification/M4.md).
+
 ## M5 — Delayed unlock (monotonic)
 
 **Goal.** Turning protection off requires a request plus 48 hours of device-on time that the system clock cannot skip. See [COOLDOWN.md](COOLDOWN.md).

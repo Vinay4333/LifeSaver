@@ -52,4 +52,5 @@ dependencies {
     debugImplementation(libs.compose.ui.tooling)
     implementation(libs.activity.compose)
     implementation(libs.core.ktx)
+    testImplementation(libs.junit)
 }

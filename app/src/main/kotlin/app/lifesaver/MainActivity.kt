@@ -27,6 +27,7 @@ import app.lifesaver.ui.BlocklistSection
 import app.lifesaver.ui.GuardSection
 import app.lifesaver.ui.HomeScreen
 import app.lifesaver.ui.LifeSaverTheme
+import app.lifesaver.ui.protectionState
 import app.lifesaver.vpn.BlockerVpnService
 import app.lifesaver.vpn.VpnStatus
 import java.io.IOException
@@ -36,6 +37,7 @@ class MainActivity : ComponentActivity() {
     private var phase by mutableStateOf(VpnStatus.phase)
     private var index by mutableStateOf(Blocklist.current)
     private var loading by mutableStateOf(true)
+    private var hasConsent by mutableStateOf(true)
     private var guardEnabled by mutableStateOf(false)
     private var guardCloses by mutableStateOf(0)
 
@@ -46,6 +48,7 @@ class MainActivity : ComponentActivity() {
 
     private val vpnConsent =
         registerForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+            hasConsent = VpnService.prepare(this) == null
             if (result.resultCode == RESULT_OK) {
                 startVpnService()
             }
@@ -67,7 +70,9 @@ class MainActivity : ComponentActivity() {
                     }
                     HomeScreen(
                         versionName = versionLabel(),
-                        phase = phase,
+                        state = protectionState(phase, hasConsent),
+                        debug = isDebuggable(),
+                        listVersion = index.version,
                         onStart = ::startProtection,
                         onStop = ::stopProtection,
                         guard = {
@@ -97,6 +102,7 @@ class MainActivity : ComponentActivity() {
 
     override fun onResume() {
         super.onResume()
+        hasConsent = VpnService.prepare(this) == null
         guardEnabled = GuardStatus.isEnabled(this)
         guardCloses = GuardStats.closes(this)
     }
